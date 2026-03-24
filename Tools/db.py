@@ -3,13 +3,13 @@ Database schema for manga tracking bot
 _id: user_id
 subs: {
   "ck": [
-    { "manga_url": "url1", "manga_title": "title1", "lastest_chapter": "1", },
-    { "manga_url": "url2", "manga_title": "title2", "lastest_chapter": "2", },
+    { "url": "url1", "title": "title1", "lastest_chapter": "1", },
+    { "url": "url2", "title": "title2", "lastest_chapter": "2", },
     ..............
   ],
   "as": [
-    { "manga_url": "url1", "manga_title": "title1", "lastest_chapter": "1", },
-    { "manga_url": "url2", "manga_title": "title2", "lastest_chapter": "2", },
+    { "url": "url1", "title": "title1", "lastest_chapter": "1", },
+    { "url": "url2", "title": "title2", "lastest_chapter": "2", },
     ..............
   ],
   ................
@@ -35,7 +35,7 @@ from pymongo.errors import PyMongoError
 
 from bot import Vars
 from operator import itemgetter
-
+from pyrogram.types import Message
 
 def async_slogs(func):
     """Async decorator for error logging."""
@@ -87,6 +87,25 @@ def get_episode_number(text: str) -> Optional[str]:
     return None
 
 
+def get_effective_user_id(user_id: int | Message | str) -> str:
+    """Returns a shared ID for admins if IS_PRIVATE is True."""
+    if isinstance(user_id, Message):
+        user_id = user_id.from_user.id
+
+    try: 
+        user_id = int(user_id)
+    except Exception:
+        user_id = "shared_admin_subs"
+
+    if user_id == "shared_admin_subs":
+        return "shared_admin_subs"
+
+    if Vars.IS_PRIVATE and user_id in Vars.ADMINS:
+        return "shared_admin_subs"
+    
+    return str(user_id)
+
+
 slugs_sites = ["cx", "as"]
 class MangaDB:
     """A class to manage manga data in the database."""
@@ -95,17 +114,17 @@ class MangaDB:
     def __init__(self):
         """Initialize database connections."""
         client = AsyncMongoClient(Vars.DB_URL)
-
+        
         self._db = client[Vars.DB_NAME]
         self.users = self._db.users
         self.acollection = self._db.premium
-
+    
 
     @async_slogs
     async def ensure_user(self, user_id: Union[str, int]) -> bool:
         """Ensure user exists in database, create if not."""
         user_id = str(user_id)
-
+        
         user_data = await self.users.find_one(
             {"_id": user_id},
             {"_id": 1}  # Only fetch _id for existence check
@@ -142,7 +161,7 @@ class MangaDB:
         async for doc in self.users.find({}):
             if isinstance(doc, dict):
                 yield doc
-
+    
     """ Settings """
     @async_slogs
     async def get_settings(self, user_id: Union[str, int]):
@@ -163,7 +182,7 @@ class MangaDB:
             {f"setting.{key}": 1}
         )
         return user_data.get("setting", {}).get(key, None) if user_data else None
-
+    
     @async_slogs
     async def set_value(self, user_id: Union[str, int], key: str, value: Any):
         user_id = str(user_id)
@@ -172,7 +191,7 @@ class MangaDB:
             {"$set": {f"setting.{key}": value}}
         )
         return None
-
+    
     @async_slogs
     async def delete_value(self, user_id: Union[str, int], key: str):
         user_id = str(user_id)
@@ -181,8 +200,8 @@ class MangaDB:
             {"$unset": {f"setting.{key}": ""}}
         )
         return None
-
-
+    
+    
     @async_slogs
     async def get_channels(self, user_id: Union[str, int], channel_type: str):
         user_id = str(user_id)
@@ -191,7 +210,7 @@ class MangaDB:
             {channel_type: 1}
         )
         return user_data.get(channel_type, []) if user_data else []
-
+    
     @async_slogs
     async def erase_channel(self, user_id: Union[str, int], channel_type: str):
         user_id = str(user_id)
@@ -218,7 +237,7 @@ class MangaDB:
             {"$pull": {channel_type: channel_id}}
         )
         return None
-
+    
     @async_slogs
     async def get_target_channel(self, user_id: Union[str, int]):
         user_id = str(user_id)
@@ -227,7 +246,7 @@ class MangaDB:
             {"target_channels": 1}
         )
         return user_data.get("target_channels", []) if user_data else []
-
+    
     @async_slogs
     async def get_auto_channel(self, user_id: Union[str, int]):
         user_id = str(user_id)
@@ -272,7 +291,7 @@ class MangaDB:
             {"$pull": {"auto_channels": channel_id}}
         )
         return None
-
+    
     @async_slogs
     async def erase_target_channel(self, user_id: Union[str, int]):
         user_id = str(user_id)
@@ -281,7 +300,7 @@ class MangaDB:
             {"$set": {"target_channels": []}}
         )
         return None
-
+    
     @async_slogs
     async def erase_auto_channel(self, user_id: Union[str, int]):
         user_id = str(user_id)
@@ -290,7 +309,7 @@ class MangaDB:
             {"$set": {"auto_channels": []}}
         )
         return None
-
+    
     @async_slogs
     async def check_dump(self, channel_id: Union[str, int]) -> Optional[str]:
         """Check if channel is configured as dump or auto channel for any user."""
@@ -319,9 +338,9 @@ class MangaDB:
         chapter: Optional[str] = None
     ) -> bool:
         """Add subscription for user."""
-        user_id = str(user_id)
+        user_id = get_effective_user_id(user_id)
         result = None
-
+        
         if not await self.ensure_user(user_id):
             return False
 
@@ -332,17 +351,17 @@ class MangaDB:
             logger.error(f"Invalid rdata type: {type(rdata)}")
             return False
 
-
+        
         if chapter and 'lastest_chapter' not in rdata:
             rdata['lastest_chapter'] = chapter
-
+        
         manga_url = str(rdata.get('url'))
         if (web and web == "as") or (manga_url and manga_url.startswith("https://asuracomic")):
             try:
                 slugs = manga_url.split("/")[-1]
                 slugs = "-".join(slugs.split("-")[:-1])
                 rdata['slugs'] = slugs
-
+            
                 result = await self.users.update_one(
                     {
                         "_id": user_id,
@@ -356,14 +375,14 @@ class MangaDB:
                 )
             except Exception:
                 pass
-
+        
         if result and result.modified_count:
             return True 
-
+        
         result = await self.users.update_one(
             {
                 "_id": user_id,
-                f"subs.{web}.manga_url": {"$ne": manga_url}  # ensure URL not already in array
+                f"subs.{web}.url": {"$ne": manga_url}  # ensure URL not already in array
             },
             {
                 "$push": {
@@ -371,7 +390,7 @@ class MangaDB:
                 }
             }
         )
-
+        
         return True if result.modified_count else False
 
     @async_slogs
@@ -382,7 +401,7 @@ class MangaDB:
         web: Optional[str] = None
     ) -> bool:
         """Check if user has subscription."""
-        user_id = str(user_id)
+        user_id = get_effective_user_id(user_id)
 
         if not manga_url and not web:
             user_data = await self.users.find_one(
@@ -395,16 +414,16 @@ class MangaDB:
 
         if manga_url and web:
             query[f"subs.{web}.url"] = manga_url
-
+            
         elif manga_url:
             # Check across all web entries
             query["subs"] = {"$elemMatch": {"url": manga_url}}
-
+            
         elif web:
             query[f"subs.{web}"] = {"$exists": True, "$ne": []}
 
         user_data = await self.users.find_one(query, {"_id": 1})
-
+        
         return user_data is not None
 
     @async_slogs
@@ -415,7 +434,7 @@ class MangaDB:
         web: Optional[str] = None
     ) -> bool:
         """Delete subscription(s) for user."""
-        user_id = str(user_id)
+        user_id = get_effective_user_id(user_id)
 
         if not await self.check_sub(user_id, manga_url, web):
             return False
@@ -425,15 +444,15 @@ class MangaDB:
             try:
                 slugs = str(manga_url).split("/")[-1]
                 slugs = "-".join(slugs.split("-")[:-1])
-
+                
                 update_query["$pull"] = {f"subs.{web}": {"slugs": slugs}}
             except Exception:
                 pass
-
+        
         elif manga_url and web:
             # Remove specific manga from specific web
             update_query["$pull"] = {f"subs.{web}": {"url": manga_url}}
-
+        
         elif manga_url:
             # Remove manga from all webs
             # This is more complex as we need to update all web arrays
@@ -459,7 +478,7 @@ class MangaDB:
                     {"$set": updates}
                 )
                 return result.modified_count > 0
-
+            
             return False
         elif web:
             # Remove entire web category
@@ -487,14 +506,14 @@ class MangaDB:
         web: Optional[str] = None
     ) -> Optional[Union[List, Dict]]:
         """Get user's subscriptions."""
-
-        user_id = str(user_id)
+        
+        user_id = get_effective_user_id(user_id)
         udata = await self.users.find_one({"_id": user_id})
         udata = udata.get("subs", {}) if udata else {}
-
+        
         if not udata:
             return None
-
+        
         rdata = []
         if not manga_url and not web:
             return [
@@ -502,13 +521,13 @@ class MangaDB:
                 for subs in udata.values()
                 for chapter_data in subs
             ]
-
+        
         if web:
             rdata = udata.get(web, [])
-
+        
         if rdata and not manga_url:
             return rdata
-
+        
         get_url = itemgetter('url')
         if rdata and manga_url:
             if (web and web == "as") or (manga_url and manga_url.startswith("https://asuracomic")):
@@ -541,7 +560,7 @@ class MangaDB:
 
     async def get_all_subs(self) -> AsyncGenerator:
         """Get all users with subscriptions."""
-
+        
         async for user_data in self.users.find(
             { "subs": { "$exists": True } },
             { "_id": 1, "subs": 1 }
@@ -557,8 +576,9 @@ class MangaDB:
     ):
         """Update the latest chapter for subscribed manga."""
         try:
-            user_id = str(user_id)
-
+            
+            user_id = get_effective_user_id(user_id)
+            
             # Filter and prepare data
             main_keys = ["title", "url", "lastest_chapter", "slugs"]
             filtered_data = {k: data.get(k) for k in main_keys if k in data}
@@ -566,7 +586,7 @@ class MangaDB:
             if 'url' not in filtered_data:
                 logger.error("No URL provided in data")
                 return False
-
+            
             manga_url = str(filtered_data['url'])
             if (web_sf and web_sf == "as") or (manga_url.startswith("https://asuracomic")):
                 try:
@@ -586,7 +606,7 @@ class MangaDB:
                         return True
                 except Exception:
                     pass
-
+            
             # Update the subscription
             result = await self.users.update_one(
                 {
@@ -601,18 +621,117 @@ class MangaDB:
             success = result.modified_count > 0
             if success:
                 logger.debug(f"Updated latest chapter for user {user_id}, web {web_sf}")
-
+            
             return success
 
         except Exception as err:
             logger.exception(f"Error saving latest chapter: {err}")
             return False
 
-    """ Premium """
+    """ Export/Import """
     @async_slogs
-    async def add_premium(self, user_id: Union[str, int], time_limit_days: int) -> bool:
+    async def get_full_user_data(self, user_id: Union[str, int]) -> Dict:
+        """Get full user data for export."""
+        user_id = get_effective_user_id(user_id)
+        user_data = await self.users.find_one(
+            {"_id": user_id},
+            {"subs": 1, "target_channels": 1, "auto_channels": 1}
+        )
+        if not user_data:
+            return {}
+        
+        return {
+            "subs": user_data.get("subs", {}),
+            "target_channels": user_data.get("target_channels", []),
+            "auto_channels": user_data.get("auto_channels", [])
+        }
+
+    @async_slogs
+    async def update_user_data(self, user_id: Union[str, int], data: Dict) -> bool:
+        """Update user data from imported JSON."""
+        user_id = get_effective_user_id(user_id)
+        if not await self.ensure_user(user_id):
+            return False
+
+        update_query = {}
+        # Handle 'subs' or 'subscriptions'
+        subs_data = data.get("subs") or data.get("subscriptions")
+        if subs_data:
+            if isinstance(subs_data, list):
+                # Convert list of subs to dict grouped by 'web'
+                formatted_subs = {}
+                for sub in subs_data:
+                    web = sub.get("web") or "default"
+                    if web not in formatted_subs:
+                        formatted_subs[web] = []
+                    
+                    # Map 'url' and 'title' keys correctly
+                    mapped_sub = {
+                        "url": sub.get("url") or sub.get("manga_url"),
+                        "title": sub.get("title") or sub.get("manga_title"),
+                        "lastest_chapter": sub.get("lastest_chapter")
+                    }
+                    # Filter out None values
+                    mapped_sub = {k: v for k, v in mapped_sub.items() if v is not None}
+                    
+                    formatted_subs[web].append(mapped_sub)
+                update_query["subs"] = formatted_subs
+            else:
+                update_query["subs"] = subs_data
+
+        for key in ["target_channels", "auto_channels"]:
+            if key in data:
+                update_query[key] = data[key]
+
+        if not update_query:
+            logger.warning(f"No valid keys found in import data for user {user_id}")
+            return False
+
+        result = await self.users.update_one(
+            {"_id": user_id},
+            {"$set": update_query}
+        )
+        # Return True if successfully acknowledged, even if no changes were made (already identical)
+        return result.acknowledged
+
+    """ Premium """
+    def parse_duration(self, duration_str: str) -> int:
+        """Parse duration string like '1 day', '1 month' into days."""
+        try:
+            # Handle cases like "1day", "1 day", "1 days", "1  day"
+            match = re.search(r'(\d+)\s*([a-zA-Z]+)', str(duration_str).strip())
+            if not match:
+                # If only a number is provided, assume it's days
+                return int(duration_str)
+            
+            value = int(match.group(1))
+            unit = match.group(2).lower()
+            
+            if unit.startswith('day'):
+                return value
+            elif unit.startswith('week'):
+                return value * 7
+            elif unit.startswith('month'):
+                return value * 30
+            elif unit.startswith('year'):
+                return value * 365
+            else:
+                return value # Default to days if unit is unknown
+        except Exception:
+            try:
+                return int(duration_str)
+            except Exception:
+                return 0
+
+    @async_slogs
+    async def add_premium(self, user_id: Union[str, int], time_limit: Union[int, str]) -> bool:
         """Add premium status to user."""
         user_id = str(user_id)
+        
+        if isinstance(time_limit, str):
+            time_limit_days = self.parse_duration(time_limit)
+        else:
+            time_limit_days = time_limit
 
         expiration_timestamp = int(time.time()) + (time_limit_days * 24 * 60 * 60)
 
@@ -661,12 +780,10 @@ class MangaDB:
 
         return count
 
-    @async_slogs
     async def get_all_premium(self) -> AsyncGenerator:
         """Get all premium user IDs."""
         async for doc in self.acollection.find(
-            {"expiration_timestamp": {"$gt": int(time.time())}},
-            {"_id": 1}
+            {"expiration_timestamp": {"$gt": int(time.time())}}
         ):
             if doc and doc.get('_id'):
                 yield str(doc['_id']), doc
@@ -684,6 +801,26 @@ class MangaDB:
 
         return user_data
 
+    async def is_authorized(self, user_id: Union[str, int]) -> bool:
+        """Check if user is authorized (admin or premium)."""
+        if not Vars.IS_PRIVATE:
+            return True
+            
+        # Admin check
+        if user_id in Vars.ADMINS:
+            return True
+        try:
+            if int(user_id) in Vars.ADMINS:
+                return True
+        except (ValueError, TypeError):
+            pass
+            
+        # Premium check
+        if await self.premium_user(user_id):
+            return True
+            
+        return False
+
     @async_slogs
     async def close(self):
         """Close database connections."""
@@ -694,4 +831,3 @@ class MangaDB:
 
 # Global database instance
 database = MangaDB()
-
