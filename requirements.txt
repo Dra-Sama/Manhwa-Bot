@@ -1,4 +1,4 @@
-requests
+curl_cffi>=0.5.0
 cloudscraper
 bs4
 reportlab
@@ -15,4 +15,4 @@ flask
 gunicorn
 cairosvg
 uvloop==0.21.0
-aiohttp
+
