@@ -1,8 +1,9 @@
 """
 This module provides functions to download, convert, and compress images, and then convert them into a PDF file.
 
-By :- Dra-Sama
+Modified:- Dra-Sama
 """
+from typing import Optional
 
 from urllib.parse import quote
 from PIL import Image, ImageFile
@@ -14,7 +15,8 @@ import os
 import pillow_avif  # This registers AVIF format support with Pillow
 import pillow_heif
 
-import requests
+from curl_cffi import requests
+
 import shutil
 
 from cloudscraper import create_scraper
@@ -23,6 +25,10 @@ import asyncio
 import PyPDF2
 import gc
 from time import sleep
+
+
+from Webs.scraper import Scraper
+
 
 ImageFile.LOAD_TRUNCATED_IMAGES = False
 
@@ -102,31 +108,46 @@ async def thumbnali_images(image_url, download_dir, base_url = None, quality=80,
         return None
 
 
-def download_image(idx: str, image_url:str, download_dir: str, headers: dict = {}, cs: bool = False, quality: int = 80):
+
+_scraper = create_scraper()
+_session = requests.Session()
+        
+def download_image(
+    idx: str, image_url:str, download_dir: str, 
+    headers: Optional[dict] = None, cs: bool = False, 
+):
     idx = idx.zfill(5)
     img_path = os.path.join(download_dir, f"{idx}.jpg")
+    
+    session = _session if not cs else _scraper
+    
+    args = (image_url,) 
+    kwargs = {
+        'stream': True,
+        'headers': headers,
+        'timeout': 50,
+    }
+    
     for retries in range(5):
         try:
-            session = requests.Session() if not cs else create_scraper()
-
-            if retries > 3:
-                session.proxies = tor_proxies
-
-            with session.get(image_url, stream=True, headers=headers, timeout=20) as image_response:
-                if image_response.status_code == 200:
-                    if os.path.exists(download_dir):
-                        with open(img_path, 'wb') as img_file:
-                            for chuck in image_response.iter_content(1024 * 64):
-                                img_file.write(chuck)
-                    else:
-                        raise Exception("Tasks cancelled")
-
-
-                elif "Attention Required! | Cloudflare" in str(image_response.text):
+            if retries > 3: # if more than 3 retries, use tor
+                kwargs['proxies'] = tor_proxies
+            
+            with session.get(*args, **kwargs) as image_response:
+                if "Attention Required! | Cloudflare" in str(image_response.text):
                     raise Exception("Cloudflare protection triggered")
+
+                if image_response.status_code != 200:
+                    raise Exception(" Not 200 Request Status ")
+                
+               
+                if os.path.exists(download_dir):
+                    with open(img_path, 'wb') as img_file:
+                        for chunk in image_response.iter_content(1024 * 64):
+                            if chunk:
+                                img_file.write(chunk)
                 else:
-                    logger.warning(f"Download :- {retries} :- {image_url}: {image_response.text}")
-                    sleep(3 * (retries + 1))
+                    raise Exception("Tasks cancelled")
 
             return str(img_path)
 
@@ -135,14 +156,11 @@ def download_image(idx: str, image_url:str, download_dir: str, headers: dict = {
             sleep(3 * (retries + 1))
             #logger.warning(f"Download :- {retries} :- {image_url}")
 
-        finally:
-            # Ensure session is close
-            if 'session' in locals():
-                try: session.close()
-                except: pass
-
     if os.path.exists(img_path):
-        os.remove(img_path)
+        try:
+            os.remove(img_path)
+        except Exception:
+            pass
 
     raise Exception("Failed to download image after 3 attempts")
 
@@ -155,6 +173,7 @@ async def download_and_convert_images(
     quality: int = 70,
     cs: bool = False,
     headers: dict = {},
+    pw: bool = False
 ):
     async def with_semaphore(*args, **kwargs):
         async with asyncio.Semaphore(5):
@@ -164,12 +183,13 @@ async def download_and_convert_images(
         os.makedirs(download_dir)
 
     headers = get_headers(base_url) if not headers else headers
-
+    
+    
     image_files = [
         with_semaphore(
             str(idx), image_url, 
             download_dir, headers=headers, 
-            cs=cs, quality=quality
+            cs=cs
         )
         for idx, image_url in enumerate(images, 1)
     ]
@@ -178,7 +198,7 @@ async def download_and_convert_images(
     process_list = await asyncio.gather(*image_files, return_exceptions=True)
     for result in process_list:
         if isinstance(result, Exception):
-            raise ImageDownloadError()
+            raise ImageDownloadError(result)
 
     picturesList = [ str(file) for file in process_list if isinstance(file, str) ]
     picturesList.sort()
