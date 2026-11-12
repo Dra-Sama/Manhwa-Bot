@@ -12,7 +12,7 @@ try:
         )
         
         if update.returncode == 0:
-            print(f"Successfully updated with latest commit {UPSTREAM_BRANCH} from UPSTREAM_REPO")
+            print(f"Successfully updated with latest commit from UPSTREAM_REPO")
         else:
             print("Something went wrong while updating, check UPSTREAM_REPO if valid or not!")
 except Exception as err:
