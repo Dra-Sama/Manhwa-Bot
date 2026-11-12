@@ -1,14 +1,15 @@
+# Code By @V_Sbotmaker (on Telegram)
 from pyrogram import filters
 from pyrogram.errors import FloodWait
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, CallbackQuery
 
 from .storage import *
 import pyrogram.errors
 
-from bot import Bot, Vars, logger
+from bot import Bot, Vars, logger, Manhwa_Bot
 
 import random
-from Tools.db import database
+from Tools.db import database, get_effective_user_id
 from Tools.my_token import verify_token
 
 import time
@@ -17,8 +18,11 @@ from asyncio import create_subprocess_exec
 from os import execl
 from sys import executable
 
-import shutil, psutil, time, os, platform
+import shutil, time, os, platform
 import asyncio
+import psutil
+
+import json 
 
 from io import BytesIO
 from copy import deepcopy
@@ -34,43 +38,32 @@ For example: `One Piece`
 
 <blockquote><b>Updates Channel : @Manga_Cruise</b></blockquote>
 """
-start_text = """<blockquote>ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴍᴀɴɢᴀ ʙᴏᴛ!!</blockquote>
+start_text = """<blockquote>🌸 ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴍᴀɴɢᴀ ʙᴏᴛ!!</blockquote>
 
-<blockquote><b>ʜᴏᴡ ᴛᴏ ᴜsᴇ ᴍᴇ? ᴊᴜsᴛ sᴇɴᴅ /ᴜs ᴀɴᴅ sᴇᴛ ᴀʟʟ ᴛʜᴇ sᴇᴛᴛɪɴɢs , ᴛʜᴇɴ sᴇɴᴅ ᴍᴇ ᴀɴʏ ᴍᴀɴɢᴀ ᴀɴᴅ ᴍᴀɴʜᴡᴀ ɴᴀᴍᴇ</b></blockquote>
+<blockquote><b>📖 ᴊᴜsᴛ sᴇɴᴅ ᴍᴇ ᴀɴʏ ᴍᴀɴɢᴀ / ᴍᴀɴʜᴡᴀ ɴᴀᴍᴇ ᴛᴏ ɢᴇᴛ sᴛᴀʀᴛᴇᴅ!</b></blockquote>
 
-<blockquote>ᴄʟɪᴄᴋ ᴏɴ sᴇᴛᴛɪɴɢs ғᴏʀ ᴍᴏʀᴇ ɪɴғᴏ.</blockquote>"""
+<blockquote>⚙️ ᴜsᴇ /ᴜs ᴛᴏ ᴄᴜsᴛᴏᴍɪᴢᴇ ʏᴏᴜʀ sᴇᴛᴛɪɴɢs
+🔔 ᴜsᴇ /sᴜʙs ᴛᴏ ᴠɪᴇᴡ ʏᴏᴜʀ sᴜʙsᴄʀɪᴘᴛɪᴏɴs</blockquote>"""
 
 Start_Button = [
   [
-    InlineKeyboardButton(" ᴋ ", "just_kidding"),
-    InlineKeyboardButton(" ᴏ ", "just_kidding"),
-    InlineKeyboardButton(" ɴ ", "just_kidding"),
-    InlineKeyboardButton(" ɴ ", "just_kidding"),
-    InlineKeyboardButton(" ɪ ", "just_kidding"),
-    InlineKeyboardButton(" ᴄ ", "just_kidding"),
-    InlineKeyboardButton(" ʜ ", "just_kidding"),
-    InlineKeyboardButton(" ɪ ", "just_kidding"),
-    InlineKeyboardButton(" ᴡ ", "just_kidding"),
-    InlineKeyboardButton(" ᴀ ", "just_kidding"),
+    InlineKeyboardButton("⚙️ 𝚂𝚎𝚝𝚝𝚒𝚗𝚐𝚜", callback_data="mus"),
+    InlineKeyboardButton("📋 𝚀𝚞𝚎𝚞𝚎", callback_data="refresh_queue")
   ],
   [
-    InlineKeyboardButton(" 𝚂𝚎𝚝𝚝𝚒𝚗𝚐𝚜 ", callback_data="mus"),
-    InlineKeyboardButton(" 𝚀𝚞𝚎𝚞𝚎 ", callback_data="refresh_queue")
-  ],
-  [
-    InlineKeyboardButton(" 𝚂𝚞𝚋𝚜𝚌𝚛𝚒𝚋𝚎 ", callback_data="isubs"),
-    InlineKeyboardButton(" 𝙷𝚎𝚕𝚙 ", callback_data="help")
+    InlineKeyboardButton("🔔 𝚂𝚞𝚋𝚜𝚌𝚛𝚒𝚋𝚎𝚜", callback_data="isubs:1"),
+    InlineKeyboardButton("❓ 𝙷𝚎𝚕𝚙", callback_data="help")
   ], 
   [
-    InlineKeyboardButton(" ᴄ ", callback_data="kclose"),
-    InlineKeyboardButton(" ʟ ", callback_data="kclose"),
-    InlineKeyboardButton(" ᴏ ", callback_data="kclose"),
-    InlineKeyboardButton(" s ", callback_data="kclose"),
-    InlineKeyboardButton(" ᴇ ", callback_data="kclose")
+    InlineKeyboardButton("✖ 𝗖𝗟𝗢𝗦𝗘", callback_data="kclose"),
   ]
 ]
 help_button = deepcopy(Start_Button)
-help_button[2][-1] = InlineKeyboardButton(" ʜᴏᴍᴇ ", callback_data="home")
+help_button[-1][0] = InlineKeyboardButton("🏠 ʜᴏᴍᴇ", callback_data="home")
+
+
+
+
 
 
 @Bot.on_callback_query(filters.regex("^home$"))
@@ -79,11 +72,11 @@ async def start(client, message):
   try:
     if Vars.IS_PRIVATE and message.chat.id not in Vars.ADMINS:
         return await message.reply("<code>hii </code>")
-
+    
     await database.ensure_user(message.from_user.id)
   except Exception:
     pass 
-
+  
   try:
     if len(message.command) > 1:
       if message.command[1] != "start":
@@ -91,54 +84,132 @@ async def start(client, message):
         token = message.command[1]
         sts = await retry_on_flood(message.reply)("<i>ㅤProcessing.....</i>")
         return await verify_token(sts, user_id, token)
-
+        
   except Exception:
     pass
 
   photo = random.choice(Vars.PICS)
-  ping = time.strftime("%H𝙷 %M𝚖 %S𝚜", time.gmtime(time.time() - Vars.PING))
-  try:
-    await retry_on_flood(message.reply_photo)(
-      photo,
-      caption=start_text.format(ping),
-      reply_markup=InlineKeyboardMarkup(Start_Button),
-      quote=True
-    )
-  except Exception:
-    await retry_on_flood(message.edit_message_media)(
-      media=InputMediaPhoto(photo, caption=start_text.format(ping)),
-      reply_markup=InlineKeyboardMarkup(Start_Button)
-    )
+  ping = time.strftime("%HH %Mm %Ss", time.gmtime(time.time() - Vars.PING))
+  if isinstance(message, CallbackQuery):
+    try:
+      await retry_on_flood(message.edit_message_media)(
+        media=InputMediaPhoto(photo, caption=start_text.format(ping)),
+        reply_markup=InlineKeyboardMarkup(Start_Button)
+      )
+    except Exception:
+      await retry_on_flood(message.edit_message_media)(
+        media=InputMediaPhoto(Vars.PICS[-1], caption=start_text.format(ping)),
+        reply_markup=InlineKeyboardMarkup(Start_Button),
+      )
+      
+  else:
+    try:
+      await retry_on_flood(message.reply_photo)(
+        photo,
+        caption=start_text.format(ping),
+        reply_markup=InlineKeyboardMarkup(Start_Button),
+      )
+    except Exception:
+      await retry_on_flood(message.reply_photo)(
+        Vars.PICS[-1],
+        caption=start_text.format(ping),
+        reply_markup=InlineKeyboardMarkup(Start_Button),
+      )
 
 
 @Bot.on_message(filters.private)
-@igrone_error
 async def on_private_message(client, message):
+  if str(message.from_user.id) in Listeing_cache:
+    return message.continue_propagation()
+
+  if message.from_user.id in client.listerner:
+    return message.continue_propagation()
+    
   channel = Vars.FORCE_SUB_CHANNEL
-  if channel in ["None", None, "none", "OFF", False, "False", ""]:
-    return message.continue_propagation()
-
-  if not client.FSB or client.FSB == []:
-    return message.continue_propagation()
-
-  channel_button, change_data = await check_fsb(client, message)
-  if not channel_button:
-    return message.continue_propagation()
-
-  channel_button = split_list(channel_button)
-  channel_button.append([InlineKeyboardButton("𝗥𝗘𝗙𝗥𝗘𝗦𝗛 ⟳", callback_data="refresh")])
-
-  await retry_on_flood(message.reply_photo)(
+  try:
+    if channel in ["None", None, "none", "OFF", False, "False", ""]:
+      return message.continue_propagation()
+    
+    if not client.FSB or client.FSB == []:
+      return message.continue_propagation()
+    
+    channel_button, change_data = await check_fsb(client, message)
+    if not channel_button:
+      return message.continue_propagation()
+    
+    channel_button = split_list(channel_button)
+    channel_button.append([InlineKeyboardButton("𝗥𝗘𝗙𝗥𝗘𝗦𝗛 ⟳", callback_data="refresh")])
+    
+    await retry_on_flood(message.reply_photo)(
       caption=Vars.FORCE_SUB_TEXT,
       photo=random.choice(Vars.PICS),
       reply_markup=InlineKeyboardMarkup(channel_button),
-      quote=True,
+    )
+    if change_data:
+      for change_ in change_data:
+        client.FSB[change_[0]] = (change_[1], change_[2], change_[3])
+  except Exception:
+    return message.continue_propagation()
+
+
+@Bot.on_message(filters.command("export"))
+async def export_data(client, message):
+  if not await database.is_authorized(message.from_user.id):
+    return await message.reply("<b>This bot is restricted. Only admins or premium users can use it.</b>")
+
+  user_id = get_effective_user_id(message.from_user)
+  data = await database.get_full_user_data(user_id)
+
+  if not data:
+    return await message.reply("<b>No data found to export.</b>")
+
+  json_data = json.dumps(data, indent=2)
+  bio = BytesIO(json_data.encode('utf-8'))
+  bio.name = f"user_data_{user_id}.json"
+
+  await retry_on_flood(message.reply_document)(
+    document=bio,
+    caption="<b>Here is your exported data file.</b>",
   )
-  if change_data:
-    for change_ in change_data:
-      client.FSB[change_[0]] = (change_[1], change_[2], change_[3])
 
+@Bot.on_message(filters.command("import"))
+async def import_data(client, message):
+  if not await database.is_authorized(message.from_user.id):
+    return await message.reply("<b>This bot is restricted. Only admins or premium users can use it.</b>")
 
+  reply = message.reply_to_message
+  if not reply or not reply.document:
+    return await message.reply("<b>Please reply to a JSON file with /import to restore your data.</b>")
+
+  if not reply.document.file_name.endswith(".json"):
+    return await message.reply("<b>Invalid file type. Please provide a .json file.</b>")
+
+  sts = await message.reply("<code>Importing data...</code>")
+  eff_user_id = get_effective_user_id(message.from_user)
+
+  try:
+    file_path = await client.download_media(reply)
+    with open(file_path, 'r') as f:
+      data = json.load(f)
+    os.remove(file_path)
+
+    if not isinstance(data, dict):
+      return await retry_on_flood(sts.edit)("<b>Invalid JSON format. Expected a dictionary.</b>")
+
+    valid_keys = ["subs", "subscriptions", "target_channels", "auto_channels"]
+    if not any(key in data for key in valid_keys):
+      return await retry_on_flood(sts.edit)("<b>No valid data found in the JSON file.</b>")
+
+    success = await database.update_user_data(eff_user_id, data)
+    if success:
+      await retry_on_flood(sts.edit)("<b>Data imported successfully!</b>")
+    else:
+      await retry_on_flood(sts.edit)("<b>Failed to import data. The database could not be updated.</b>")
+
+  except Exception as e:
+    # logger.exception(e)  # Fallback if logger is not in scope
+    await retry_on_flood(sts.edit)(f"<b>Error during import: {e}</b>")
+  
 
 
 
@@ -148,7 +219,7 @@ async def my_plan(client, message):
   if plan:
     xt = (plan["expiration_timestamp"] - (time.time()))
     x = round(xt / (24 * 60 * 60))
-
+  
     await retry_on_flood(message.reply)(
       f"""
 <i>Your Information:</i>
@@ -159,16 +230,17 @@ async def my_plan(client, message):
   <b>- Expiration Days: {x}</b> 
 
 <i>Thanks For Buying It......</i>""",
-      quote=True,
       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("▏𝗖𝗟𝗢𝗦𝗘▕", callback_data="kclose")]])
     )
-
+    
   else:
     await retry_on_flood(message.reply)(
       "<i> You Have No Plan!! </i>",
       reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton(" Buy Now ", callback_data="premuim")]
       ]))
+
+
 
 
 @Bot.on_message(filters.command(["clean_tasks", "clean_queue"]))
@@ -182,6 +254,9 @@ async def deltask(client, message):
     await message.reply(f"<i>All Your Tasks Deleted:- {numb} </i>")
   else:
     await message.reply("<i>There is no any your pending tasks.... </i>")
+
+
+
 
 
 
@@ -208,16 +283,18 @@ async def add_handler(_, msg):
     else:
       Vars.ADMINS.append(user_id)
       await retry_on_flood(sts.edit)("<code>User added to admin successfully.</code>")
-
+      
   except Exception as err:
     await retry_on_flood(sts.edit)(err)
+
+
 
 
 @Bot.on_message(filters.command(["del_premium"]))
 async def del_handler(_, msg):
   if msg.from_user.id not in Vars.ADMINS:
     return
-
+  
   sts = await msg.reply_text("<code>Processing...</code>")
   try:
     user_id = int(msg.text.split(" ")[1])
@@ -230,16 +307,18 @@ async def del_handler(_, msg):
       )
     except Exception:
       pass
-
+    
   except Exception as err:
     await retry_on_flood(sts.edit)(err)
+
+
 
 
 @Bot.on_message(filters.command(["del_expired", "del_expired_premium"]))
 async def del_expired_handler(_, msg):
   if msg.from_user.id not in Vars.ADMINS:
     return
-
+  
   sts = await msg.reply_text("<code>Processing...</code>")
   try:
     await database.remove_expired_users()
@@ -248,11 +327,13 @@ async def del_expired_handler(_, msg):
     await retry_on_flood(sts.edit)(err)
 
 
+
+
 @Bot.on_message(filters.command(["premium", "premium_users"]))
 async def premium_handler(_, msg):
   if msg.from_user.id not in Vars.ADMINS:
     return
-
+    
   sts = await msg.reply_text("<code>Processing...</code>")
   try:
     txt = "<b>Premium Users:-</b>\n"
@@ -279,7 +360,7 @@ async def premium_handler(_, msg):
 async def b_handler(_, msg):
   if msg.from_user.id not in Vars.ADMINS:
     return
-
+  
   return await borad_cast_(_, msg)
 
 
@@ -287,21 +368,21 @@ async def b_handler(_, msg):
 async def pb_handler(_, msg):
   if msg.from_user.id not in Vars.ADMINS:
     return
-
+  
   return await borad_cast_(_, msg, pin=True)
 
 @Bot.on_message(filters.command(["forward", "fd"]))
 async def fb_handler(_, msg):
   if msg.from_user.id not in Vars.ADMINS:
     return
-
+  
   return await borad_cast_(_, msg, forward=True)
 
 @Bot.on_message(filters.command(["pforward", "pfd"]))
 async def pfb_handler(_, msg):
   if msg.from_user.id not in Vars.ADMINS:
     return
-
+  
   return await borad_cast_(_, msg, pin=True, forward=True)
 
 async def borad_cast_(_, message, pin=None, forward=None):
@@ -313,25 +394,25 @@ async def borad_cast_(_, message, pin=None, forward=None):
     blocked = 0
     deleted = 0
     unsuccessful = 0
-
+    
     await retry_on_flood(sts.edit)("<code>Broadcasting...</code>")
-
+    
     async for user_data in database.get_users():
       try:
         user_id = user_data.get("_id")
         if not user_id:
           continue
-
+        
         if forward:
           docs = await retry_on_flood(msg.forward)(int(user_id))
         else:
           docs = await retry_on_flood(msg.copy)(int(user_id))
-
+          
         if pin:
           await retry_on_flood(docs.pin)(both_sides=True)
 
         successful += 1
-
+      
       except pyrogram.errors.UserIsBlocked:
         blocked += 1
       except pyrogram.errors.PeerIdInvalid:
@@ -360,10 +441,12 @@ Unsuccessful: <code>{unsuccessful}</code></b>"""
 async def restart_(client, message):
   if message.from_user.id not in Vars.ADMINS:
     return
-
-  await message.reply_text("<code>....</code>", quote=True)
+  
+  await message.reply_text("<code>....</code>")
   await (await create_subprocess_exec("python3", "update.py")).wait()
   execl(executable, executable, "-B", "main.py")
+
+
 
 
 @Bot.on_message(filters.command("update"))
@@ -375,7 +458,7 @@ async def update_bot(client, message):
       msg = await retry_on_flood(message.reply_text)("<b><blockquote>Pulling the latest updates and restarting the bot...</blockquote></b>")
 
       # Run git pull
-      git_pull = subprocess.run(["git", "pull"], capture_output=True, text=True)
+      git_pull = subprocess.run(["git", "fetch"], capture_output=True, text=True)
 
       if git_pull.returncode == 0:
             await retry_on_flood(msg.edit_text)(f"<b><blockquote>Updates pulled successfully:\n\n{git_pull.stdout}</blockquote></b>")
@@ -395,6 +478,7 @@ async def update_bot(client, message):
     execl(executable, executable, "-B", "main.py")
 
 
+
 def humanbytes(size):
   if not size:
     return ""
@@ -409,6 +493,8 @@ def humanbytes(size):
 
 def get_process_stats():
   p = psutil.Process(os.getpid())
+  
+  mem_info = psutil.virtual_memory()
   try:
       cpu = p.cpu_percent(interval=0.5)
   except Exception:
@@ -419,11 +505,14 @@ def get_process_stats():
       vms = humanbytes(mem_info.vms)
   except Exception:
       rss = vms = "N/A"
+  
   return (
-      f" ├ CPU: {cpu}%\n"
-      f" ├ RAM (RSS): {rss}\n"
-      f" └ RAM (VMS): {vms}"
+    f" ├ CPU: {cpu}%\n"
+    f" ├ RAM (RSS): {rss}\n"
+    f" └ RAM (VMS): {vms}\n"
+    f" └ Cache: {humanbytes(get_cache())}"
   )
+
 
 @Bot.on_message(filters.command('stats'))
 async def show_stats(client, message):
@@ -475,6 +564,8 @@ async def show_stats(client, message):
 🧠 **RAM (Memory)**
 ├ Total:  `{ram_total}`
 ├ Used:  `{ram_used}` ({ram_usage_percent}%)
+├ Cache: `{humanbytes(ram.cached)}`
+├ Buffers: `{humanbytes(ram.buffers)}`
 └ Free:  `{ram_free}`
 
 ⚡ **CPU**
@@ -498,17 +589,37 @@ async def show_stats(client, message):
 
 ⏱️ **Performance**
 └ Current Ping:  `{time_taken_ms:.3f} ms`
-"""
 
-  await retry_on_flood(message.reply_text)(response_text, quote=True)
+** Server **
+├ County: `{client.county_info.get('country')}`
+└ ISP: `{client.county_info.get('isp')}`
+"""
+  
+  await retry_on_flood(message.reply_text)(response_text)
   await retry_on_flood(status_msg.delete)()
+
+
+@Bot.on_message(filters.command("server"))
+async def server_info(client, message):
+  if message.from_user.id not in Vars.ADMINS:
+    return
+  
+  await retry_on_flood(message.reply_text)(
+    f"<b>Server Info:</b>\n\n"
+    f"<b>Country:</b> {client.county_info.get('country')}\n"
+    f"<b>ISP:</b> {client.county_info.get('isp')}\n"
+    f"<b>IP:</b> {client.county_info.get('ip')} \n"
+    f"<b>Region:</b> {client.county_info.get('regionName')}\n"
+    f"<b>City:</b> {client.county_info.get('city')}\n"
+    f"<b>Org:</b> {client.county_info.get('org')}\n"
+  )
 
 
 @Bot.on_message(filters.command("shell"))
 async def shell(_, message):
   if message.from_user.id not in Vars.ADMINS:
     return
-
+  
   cmd = message.text.split(maxsplit=1)
   if len(cmd) == 1:
     return await retry_on_flood(message.reply)("<code>No command to execute was given.</code>")
@@ -560,5 +671,14 @@ async def help(client, message):
       HELP_MSG,
       reply_markup=InlineKeyboardMarkup(help_button)
     )
+
+
+@Bot.on_message(filters.command("sources") & filters.private)
+async def sources_cmd(client, message):
+  """Show interactive source management panel."""
+  user_id = message.from_user.id
+  from .settings import get_sources_panel  # noqa: PLC0415
+  text, reply_markup = await get_sources_panel(user_id, page=1)
+  await retry_on_flood(message.reply)(text, reply_markup=reply_markup)
 
 

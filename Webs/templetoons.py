@@ -1,3 +1,4 @@
+# Code By @V_Sbotmaker (on Telegram)
 
 from .scraper import Scraper
 import json
@@ -44,31 +45,38 @@ class TempleToonsWebs(Scraper):
     bs = BeautifulSoup(content, "html.parser") if content else None
     if bs:
       con = bs.find(class_="px-5 py-7 rounded-b-xl text-white/90 shadow-red-400 shadow-md bg-black/50")
-      
+
       # < ----- Description ----- >
       desc = con.find_next("p", class_="text-xs md:text-sm lg:text-normal") if con else None
       desc = desc.text if desc else "N/A"
+
       
       # < ----- Status ----- >
-      status_container  = con.find(class_="grid grid-cols-2 lg:grid-cols-3 gap-2 text-xs md:text-sm lg:text-normal") if con else None
       pattern = r"Status:\s+([^\n]+)"
-      
-      status_matches = "N/A"
-      if status_container:
-        for status in status_container:
-          status_matches = re.findall(pattern, status.text)
-          if status_matches:
-            status_matches = status_matches[0]
-            break
-      
+      status_container = con.find(class_="grid grid-cols-2 lg:grid-cols-3 gap-2 text-xs md:text-sm lg:text-normal") if con else None
+      try:
+        status_matches = next((re.findall(pattern, status.text)[0] for status in status_container if re.findall(pattern, status.text)), "N/A")
+      except Exception:
+        status_matches = "N/A"
+
+
+      # < ----- genres ----- >
+      genres = con.find(class_="flex flex-row flex-wrap gap-2 text-xs md:text-sm lg:text-normal mt-2")
+    
+      if genres.find_next("p"):
+        genres = genres.find_all("p")
+        genres = ", ".join([genre.text.strip() for genre in genres]) if genres else "N/A"
+      else:
+        genres = "N/A"
+
       results['msg'] = DEAULT_MSG_FORMAT.format(
         title=results['title'],
-        status=status_matches,
-        summary=desc,
-        genres="N/A",
+        status=status_matches if status_matches else "N/A",
+        summary=desc[:200],
+        genres=genres,
         url=results['url']
       )
-      
+
       # < ----- Chapters ----- >
       results['chapters'] = bs.find_all(
         "a", class_="col-span-full sm:col-span-3 lg:col-span-2 flex flex-row gap-2 bg-[#131212] rounded-lg h-[90px] overflow-hidden"
@@ -125,24 +133,3 @@ class TempleToonsWebs(Scraper):
 
     return images_urls
 
-
-  async def get_updates(self, page:int=1):
-    output = []
-    results = await self.get(self.api_url, cs=True, rjson=True)
-    if results:
-      for data in results:
-        try:
-          rdata = {}
-
-          rdata['url'] = f'https://templetoons.com/comic/{data["series_slug"]}'
-          rdata['manga_title'] = data['title']
-
-          rdata['chapter_url'] = f'https://templetoons.com/comic/{data["series_slug"]}/{data["Chapter"][0]["chapter_slug"]}'
-          rdata['title'] = data['Chapter'][0]['chapter_name']
-
-          rdata['poster'] = data['thumbnail']
-          output.append(rdata)
-        except:
-          continue
-
-    return output

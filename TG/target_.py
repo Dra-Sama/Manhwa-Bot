@@ -1,7 +1,8 @@
+# Code By @V_Sbotmaker (on Telegram)
 import random
 from pyrogram import filters
 from pyrogram.types import (
-   Chat, ChatPreview, InlineKeyboardButton, InlineKeyboardMarkup, 
+   Chat, InlineKeyboardButton, InlineKeyboardMarkup, 
    InputMediaDocument, InputMediaPhoto, Message
 )
 
@@ -14,19 +15,21 @@ from bot import Bot, Vars, logger
 from Tools.db import database
 
 from Tools.uploaders import (
-  ChannelInfoCache, Uploader, clean_text_ as clean_text, update_notify,
-  get_channel_info, get_target_auto_channel
+  get_chat, Uploader, clean_text_ as clean_text, 
+  update_notify, get_target_auto_channel
 )
 
 from pyrogram.enums import ChatMemberStatus
 from copy import deepcopy
 
 
+PAGE_SIZE = 15
 
 cache_handle_type = {
   "a": "auto_channels",
   "t": "target_channels"
 }
+
 
 def iterate_(data: list, page: int = 1):
   try:
@@ -34,16 +37,21 @@ def iterate_(data: list, page: int = 1):
   except Exception:
     page = 1
 
-  if not data or page < 0:
-      return []
+  if not data or page < 1:
+    return []
 
-  return data[(page - 1) * 15:page * 15] if page != 1 else data[:15]
+  start = (page - 1) * PAGE_SIZE
+  return data[start:start + PAGE_SIZE]
+
 
 async def get_target_markup(user_id: str, handle_type: str, page: int = 1):
 
     try:
       page = int(page)
     except Exception:
+      page = 1
+
+    if page < 1:
       page = 1
 
     button = []
@@ -61,19 +69,22 @@ async def get_target_markup(user_id: str, handle_type: str, page: int = 1):
 
     handle_type = handle_type[0]
 
-    for channel_id in iterate_(data, page):
-      i = data.index(channel_id)
+    
+    offset = (page - 1) * PAGE_SIZE
+    page_items = iterate_(data, page)
 
-      channel_ = await get_channel_info(channel_id)
+    for i, channel_id in enumerate(page_items, start=offset):
+
+      channel_ = await get_chat(channel_id)
       channel_name = channel_.title if channel_ else channel_id
 
-      if isinstance(channel_, ChannelInfoCache):
-        channel_link = channel_.channel_info.invite_link
+      if isinstance(channel_, Chat):
+        channel_link = channel_.invite_link
 
-        txt += f"{i}. <a href='{channel_link}'>{channel_name}</a>\n"
-
-      elif isinstance(channel_, ChatPreview):
-        txt += f"{i}. {channel_name} [Not Added]\n"
+        if channel_link:
+          txt += f"{i}. <a href='{channel_link}'>{channel_name}</a>\n"
+        else:
+          txt += f"{i}. {channel_name}\n"
 
       else:
         txt += f"{i}. {channel_name} [Not Added]\n"
@@ -98,7 +109,6 @@ async def get_target_markup(user_id: str, handle_type: str, page: int = 1):
           InlineKeyboardButton("<2x", callback_data=f"tr:{page - 2}:{handle_type}")
       )
 
-
     if iterate_(data, page=page - 1):
         arrow.append(
             InlineKeyboardButton("<<", callback_data=f"tr:{page - 1}:{handle_type}")
@@ -122,7 +132,6 @@ async def get_target_markup(user_id: str, handle_type: str, page: int = 1):
     if arrow:
         button.append(arrow)
 
-
     extra_button = [
       [
         InlineKeyboardButton(" + 𝘈𝘥𝘥 + ", callback_data=f"tadd:{handle_type}"),
@@ -138,7 +147,6 @@ async def get_target_markup(user_id: str, handle_type: str, page: int = 1):
       ]
     ]
     button.extend(extra_button)
-
 
     return button, txt
 
@@ -206,10 +214,11 @@ async def replace_(client, message):
 
 
 
-
-
-@Bot.on_callback_query(filters.regex("^target_channel|auto_channel$"))
+@Bot.on_callback_query(filters.regex("^(target_channel|auto_channel)$"))
 async def target_channel_(client, callback):
+  if not Vars.AUTO_F:
+    return await retry_on_flood(callback.answer)("Auto Upload is Disabled", show_alert=True)
+
   if (Vars.IS_PRIVATE) and (callback.message.chat.id not in Vars.ADMINS):
     return await retry_on_flood(callback.answer)("<code>You cannot use me baby </code>")
 
@@ -224,7 +233,6 @@ async def target_channel_(client, callback):
   )
 
 
-
 @Bot.on_callback_query(filters.regex("^tr:")) # tr:{page+1}:{handle_type}
 async def target_channel_cb_(client, query):
   split_data = query.data.split(":")
@@ -233,7 +241,7 @@ async def target_channel_cb_(client, query):
     page, handle_type = split_data[-2], split_data[-1]
   else:
     await igrone_error(query.answer)("This is an old button, please click at refresh", show_alert=True)
-    return 
+    return
 
   try:
     page = int(page)
@@ -249,7 +257,6 @@ async def target_channel_cb_(client, query):
     InputMediaPhoto(random.choice(Vars.PICS), caption=txt),
     reply_markup=InlineKeyboardMarkup(button)
   )
-
 
 
 @Bot.on_callback_query(filters.regex("^tadd:")) # tadd:{handle_type}
@@ -272,9 +279,11 @@ async def target_channel_add_(client, query):
   Listeing_cache[str_id] = (listener_id, handle_type)
 
 
-
 @Bot.on_message((filters.private |  filters.forwarded) & ~filters.regex(r"/"))
 async def target_channel_add_text_(client, message: Message):
+  if not Vars.AUTO_F:
+    return message.continue_propagation()
+
   try:
     str_id = str(message.from_user.id)
     if str_id not in Listeing_cache:
@@ -291,18 +300,23 @@ async def target_channel_add_text_(client, message: Message):
   check_channel_list = deepcopy(target_) if handle_type == "target_channels" else deepcopy(auto_)
   del target_, auto_
 
-
   if message.forward_from_chat:
     channel_id = int(message.forward_from_chat.id)
 
   else:
-    try: 
+    try:
       channel_id = int(message.text)
-    except Exception: 
+    except Exception:
       channel_id = str(message.text)
 
-  channel_info = await get_channel_info(channel_id)
-  if not channel_info or not isinstance(channel_info, ChannelInfoCache):
+  member = await retry_on_flood(Bot.get_chat_member)(channel_id, message.from_user.id)
+
+  if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+    await retry_on_flood(message.reply)("<code>You are not admin of this channel</code>")
+    return
+
+  channel_info = await get_chat(channel_id)
+  if not channel_info or not isinstance(channel_info, Chat):
     await retry_on_flood(message.reply_text)(
       "<b><i>Add Bot in Channel With Full Right</i></b>"
     )
@@ -319,7 +333,6 @@ async def target_channel_add_text_(client, message: Message):
     await retry_on_flood(message.reply_text)(
       f"<b>Channel Already Added: {channel_id}</b>"
     )
-
 
 
 @Bot.on_message(filters.command("stop") & filters.private)
@@ -339,13 +352,11 @@ async def stop_listening_(client, message):
       await retry_on_flood(message.reply_photo)(
         ran_pics, caption=txt,
         reply_markup=InlineKeyboardMarkup(button),
-        quote=True
       )
     except Exception:
       await retry_on_flood(message.reply_photo)(
         Vars.PICS[0], caption=txt,
         reply_markup=InlineKeyboardMarkup(button),
-        quote=True
       )
 
     await retry_on_flood(Bot.delete_messages)(
@@ -355,7 +366,6 @@ async def stop_listening_(client, message):
   except Exception as err:
     logger.exception(err)
     await retry_on_flood(sts.edit)(f"`Error: {err}`")
-
 
 
 @Bot.on_callback_query(filters.regex("^timport:")) # timport:{handle_type}
@@ -372,18 +382,15 @@ async def target_channel_import_(client, query):
   handle_type = cache_handle_type.get(handle_type, "target_channels")
   target_channels, auto_channels = await get_target_auto_channel(str_id)
 
-  import_list = []
   if handle_type == "target_channels":
     handle_type = "auto_channels"
-    for channel_id in target_channels:
-      if channel_id not in auto_channels:
-        import_list.append(channel_id)
+    existing = set(auto_channels)
+    import_list = [c for c in target_channels if c not in existing]
+    
   else:
     handle_type = "target_channels"
-    for channel_id in auto_channels:
-      if channel_id not in target_channels:
-        import_list.append(channel_id)
-
+    existing = set(target_channels)
+    import_list = [c for c in auto_channels if c not in existing]
 
   if not import_list:
     await igrone_error(query.answer)(" Cannot Import, Not Found ")
@@ -403,8 +410,6 @@ async def target_channel_import_(client, query):
     )
   except Exception:
     await igrone_error(query.answer)(" Error Occured ")
-
-
 
 
 @Bot.on_callback_query(filters.regex("^tin_")) # tin_{channel_range}:{handle_type}:{page}
@@ -468,12 +473,10 @@ async def target_channel_info_(client, query):
     ]
   ])
 
-
   await retry_on_flood(query.edit_message_media)(
     InputMediaPhoto(random.choice(Vars.PICS), caption=channel_info_text),
     reply_markup=button
   )
-
 
 
 @Bot.on_callback_query(filters.regex("^trm")) #trm:{channel_range}:{handle_type}:{page}
@@ -500,11 +503,10 @@ async def target_channel_remove_(client, query):
   handle_type = cache_handle_type.get(handle_type, "target_channels")
   await database.ensure_user(query.from_user.id)
 
-  try: 
+  try:
     channel_range = int(channel_range)
   except Exception:
     channel_range = channel_range
-
 
   str_id = str(query.from_user.id)
 
@@ -530,7 +532,6 @@ async def target_channel_remove_(client, query):
         await igrone_error(query.answer)("Users  Not Found")
         return
 
-      #logger.error(channel_id)
       await database.remove_channel(user_id, handle_type, channel_id)
 
       await retry_on_flood(query.answer)("Channel Removed")
@@ -546,14 +547,13 @@ async def target_channel_remove_(client, query):
   )
 
 
-
-
-@Bot.on_message(filters.document)
+@Bot.on_message(filters.document & ~filters.private)
 async def target_channel_forward_(client, message):
+  if not Vars.AUTO_F:
+    return message.continue_propagation()
 
-  channel_id =  message.chat.id
+  channel_id = message.chat.id
   user_id = await database.check_dump(channel_id)
-  auto_channels = await database.get_auto_channel(str(user_id))
 
   file_name = message.document.file_name
   try:
@@ -566,22 +566,25 @@ async def target_channel_forward_(client, message):
 
   original_ep_num = str(get_episode_number(file_name))
 
-  if channel_id in auto_channels:
-    try:
-      channel_info = await get_channel_info(channel_id)
-    except Exception:
-      channel_info = None
+  # Only fetch auto_channels if we have a valid user_id
+  if user_id:
+    auto_channels = await database.get_auto_channel(str(user_id))
+    if channel_id in auto_channels:
+      try:
+        channel_info = await get_chat(channel_id)
+      except Exception:
+        channel_info = None
 
-    if not channel_info:
+      if not channel_info:
+        return
+
+      logger.info(f"Auto updating {search_name} {original_ep_num}")
+      await update_notify(
+        post_info=message, user_id=user_id,
+        manga_title=message.chat.title, episode_number=original_ep_num,
+        channel_info=channel_info
+      )
       return
-
-    logger.info(f"Auto updating {search_name} {original_ep_num}")
-    await update_notify(
-      post_info=message, user_id=user_id,
-      manga_title=message.chat.title, episode_number=original_ep_num,
-      channel_info=channel_info
-    )
-    return
 
   all_dump_channel = []
   try:
@@ -590,10 +593,11 @@ async def target_channel_forward_(client, message):
         if "setting" not in user_info:
           user_info['setting'] = {}
 
-        if dump_:=  user_info["setting"].get("dump", None):
+        if dump_ := user_info["setting"].get("dump", None):
           all_dump_channel.append(dump_)
 
-      all_dump_channel.append(Vars.CONSTANT_DUMP_CHANNEL)
+      if Vars.CONSTANT_DUMP_CHANNEL:
+        all_dump_channel.append(Vars.CONSTANT_DUMP_CHANNEL)
 
     elif user_id:
       dump_ = (await database.get_settings(user_id)).get("dump", None)
@@ -602,16 +606,30 @@ async def target_channel_forward_(client, message):
 
   except Exception as err:
     logger.exception(err)
-    return
+    return message.continue_propagation()
 
   if channel_id not in all_dump_channel:
-    return
+    return message.continue_propagation()
+
+  # For IS_PRIVATE mode: find the owner of this dump channel
+  if Vars.IS_PRIVATE and not user_id:
+    async for user_info in database.get_users():
+      if user_info.get("setting", {}).get("dump") == channel_id:
+        user_id = str(user_info["_id"])
+        break
+    if not user_id:
+      logger.warning(f"Could not find owner for dump channel {channel_id}")
+      return message.continue_propagation()
+
+  if not user_id:
+    return message.continue_propagation()
 
   search_name = str(search_name).lower().strip()
   search_name = search_name.replace(str(original_ep_num), "")
   search_name = clean_text(search_name)
   search_name = search_name.lower().strip()
   logger.debug(f" Processing {search_name} {original_ep_num} ")
+  
   try:
     await Uploader().upload_to_targets_channels(
       docs=message, original_ep_num=original_ep_num,
@@ -619,6 +637,7 @@ async def target_channel_forward_(client, message):
     )
   except Exception as e:
     logger.exception(e)
+    
     await igrone_error(Bot.send_message)(
       Vars.LOG_CHANNEL, f"Error: `{e}`"
-    ) if  Vars.LOG_CHANNEL else None
+    ) if Vars.LOG_CHANNEL else None

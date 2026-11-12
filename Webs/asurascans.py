@@ -1,4 +1,5 @@
-from .scraper import Scraper
+# Code By @V_Sbotmaker (on Telegram)
+from .scraper import shared_scraper as scraper
 import json
 
 from bs4 import BeautifulSoup
@@ -32,12 +33,15 @@ class AsuraScansWebs:
     
     search_url = f"{self.api_url}/api/search?q={quote(query)}"
     
-    mangas = await Scraper(headers=headers).get(search_url, cs=True, rjson=True)
+    mangas = await scraper.get(
+      search_url, cs=True, rjson=True,
+      headers=headers
+    )
     
     if not isinstance(mangas, dict):
       return results
     
-    if "data" not in mangas:
+    if "data" not in mangas or not isinstance(mangas['data'], list):
       return results
     
     for manga_data in mangas['data']:
@@ -75,20 +79,22 @@ class AsuraScansWebs:
     results = data.copy()
     del data
     
-    content = await Scraper(headers=self.headers).get(results['url'], cs=True)
+    content = await scraper.get(
+      results['url'], cs=True, headers=self.headers
+    )
     if not content:
       return results
     
     
     bs = BeautifulSoup(content, "html.parser")
-
-    if "poster" not in results or results['poster'] is None:
+    
+    if "poster" not in results or not results['poster']:
       ptag = bs.select_one("div.rounded-xl.z-0.w-full.h-full.absolute.top-0.left-0")
       if ptag and (img_tag := ptag.find_next("img")):
         img_tag = img_tag.get("src")
         results['poster'] = img_tag.strip() if img_tag else None
-
-    if "msg" not in results or results['msg'] is None:
+    
+    if "msg" not in results or not results['msg']:
       # Description
       desc = bs.select_one("div.mt-3.relative")
       desc = desc.find_next("p") if desc else None
@@ -163,7 +169,7 @@ class AsuraScansWebs:
   async def get_pictures(self, url, data=None) -> list:
     image_url = []
     
-    response: str = await Scraper(headers=self.headers).get(url, cs=True)
+    response: str = await scraper.get(url, cs=True, headers=self.headers)
     if not response:
       return image_url
 

@@ -1,3 +1,4 @@
+# Code By @V_Sbotmaker (on Telegram)
 
 from .scraper import Scraper
 import json
@@ -9,7 +10,7 @@ import re
 from loguru import logger
 from .utitls import DEAULT_MSG_FORMAT
 
-
+BYPASS_URL = "https://api.shanksytprem.workers.dev/proxy?url={}"
 class ManhwaClanWebs(Scraper):
   def __init__(self):
     super().__init__()
@@ -31,7 +32,9 @@ class ManhwaClanWebs(Scraper):
     }
 
   async def search(self, query: str = ""):
-    url = f"https://manhwaclan.com/?s={quote_plus(query)}&post_type=wp-manga"
+    url = BYPASS_URL.format(
+      quote(f"{self.url}?s={quote_plus(query)}&post_type=wp-manga")
+    )
     mangas = await self.get(url)
 
     bs = BeautifulSoup(mangas, "html.parser") if mangas else None
@@ -54,8 +57,8 @@ class ManhwaClanWebs(Scraper):
 
   async def get_chapters(self, data, page: int=1):
     results = data
-    
-    content = await self.get(results['url'])
+    url = BYPASS_URL.format(quote(results['url']))
+    content = await self.get(url)
     bs = BeautifulSoup(content, "html.parser") if content else None
     if bs:
       con = bs.find(class_="summary_content")
@@ -96,6 +99,7 @@ class ManhwaClanWebs(Scraper):
     return chapters_list[(page - 1) * 60:page * 60] if page != 1 else chapters_list
 
   async def get_pictures(self, url, data=None):
+    url = BYPASS_URL.format(quote(url))
     response = await self.get(url)
     bs = BeautifulSoup(response, "html.parser")
 
@@ -106,3 +110,6 @@ class ManhwaClanWebs(Scraper):
     image_links = [manga.get("src").strip() for manga in mangas]
     
     return image_links
+
+
+  

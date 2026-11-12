@@ -1,3 +1,4 @@
+# Code By @V_Sbotmaker (on Telegram)
 from .scraper import Scraper
 import json
 from bs4 import BeautifulSoup
@@ -154,4 +155,28 @@ class ComickWebs(Scraper):
 
     return images_url
 
-  
+  async def get_updates(self, page: int = 1):
+    output = []
+    while page <= 5:
+      url = f"https://api.comick.fun/chapter?page={page}&device-memory=8&order=new"
+      results = await self.get(url, cs=True, rjson=True, headers=self.headers)
+
+      for data in results:
+        url = f"https://comick.io/comic/{data['md_comics']['slug']}"
+        file_key = data["md_comics"]['md_covers'][0]["b2key"]
+
+        images = f"https://meo.comick.pictures/{file_key}"
+        chapter_url = f"{url}/{data['hid']}-chapter-{data['chap']}-en"
+
+        data['poster'] = images
+        data['chapter_url'] = chapter_url
+
+        data['url'] = url
+        data['manga_title'] = data['md_comics']['title']
+        data['title'] = f"Chapter {data['chap']}"
+
+        output.append(data)
+
+      page += 1
+
+    return output

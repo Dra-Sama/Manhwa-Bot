@@ -1,108 +1,157 @@
+# Code By @V_Sbotmaker (on Telegram)
+from __future__ import annotations
+
+import collections
 import asyncio
 import random
 import shutil
 import string
-from typing import Dict, Optional, Tuple
+import time
+from collections import OrderedDict
+from collections.abc import MutableMapping
+from functools import wraps
+from os import path as ospath
+from threading import RLock, Timer
+from typing import Any, Dict, Iterator, Optional, Tuple
 
-from bot import logger, Vars
-import string
-from typing import Dict, Optional, Tuple
-
-from bot import logger
+import pyrogram.errors
+from natsort import natsorted, ns
 from pyrogram.errors import FloodWait
+
+import psutil
+
+from bot import Bot, Vars, logger
 from .db import database, get_episode_number
 from .img2pdf import thumbnali_images
-from bot import Bot
-from os import path as ospath
-import pyrogram.errors
-from io import BytesIO
-
-import time
-
-#from collections import OrderedDict
-from threading import Lock, Timer
-
-from Tools.img2pdf import download_and_convert_images
+from .ihandler import ihandler
+from itertools import chain
 
 
-def igrone_error(func, sync=False):
+# ──────────────────────────────────────────────────────────────────────────────
+_REMOVE_CHARS = "_&;:'|*?><`!@#$%^~+=/\\\n"
+_TRANSLATOR   = str.maketrans("", "", _REMOVE_CHARS)
+
+
+def clean(txt: str, length: int = -1) -> str:
+    txt = txt.translate(_TRANSLATOR)
+    txt = txt.replace("None", "").replace(".jpg", "")
+    return txt[:length] if length != -1 else txt
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Decorators
+# ──────────────────────────────────────────────────────────────────────────────
+
+def igrone_error(func):
+    @wraps(func)
     async def wrapper(*args, **kwargs):
         try:
-            if sync:
-                return await asyncio.to_thread(func, *args, **kwargs)
-            else:
-                tasks = await asyncio.gather(*[func(*args, **kwargs)])
-                return tasks[0]
+            return await func(*args, **kwargs)
         except Exception:
             return None
-
     return wrapper
 
+
+def log(func, r: bool = False):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            logger.exception(f"Error in {func.__name__}: {e}")
+            if r:
+                raise
+            return None
+    return wrapper
+
+
 def retry_on_flood(func):
+    @wraps(func)
     async def wrapper(*args, **kwargs):
         while True:
             try:
                 return await func(*args, **kwargs)
-            except FloodWait as e:
-                await asyncio.sleep(int(e.value) + 3)
-                logger.warning(f'FloodWait: waiting {e.value}s')
-                await asyncio.sleep(e.value + 3)
 
-            except (ValueError, pyrogram.errors.QueryIdInvalid, pyrogram.errors.MessageNotModified):
+            except FloodWait as e:
+                wait = int(e.value) + 3
+                logger.warning(f"FloodWait: waiting {wait}s")
+                await asyncio.sleep(wait)
+
+            except pyrogram.errors.exceptions.bad_request_400.InputUserDeactivated:
+                chat_id = kwargs.get("chat_id")
+                if chat_id:
+                    await database.delete_user(chat_id)
+                break
+
+            except (
+                ValueError,
+                pyrogram.errors.QueryIdInvalid,
+                pyrogram.errors.MessageNotModified,
+                pyrogram.errors.exceptions.bad_request_400.ChannelInvalid,
+            ):
                 raise
 
+            except ConnectionError:
+                raise
 
-            except(pyrogram.errors.exceptions.bad_request_400.WebpageCurlFailed, pyrogram.errors.exceptions.bad_request_400.WebpageMediaEmpty, pyrogram.errors.exceptions.bad_request_400.PeerIdInvalid, pyrogram.errors.exceptions.bad_request_400.UsernameNotOccupied, pyrogram.errors.exceptions.bad_request_400.BadRequest, pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid):
+            except (
+                pyrogram.errors.exceptions.bad_request_400.WebpageCurlFailed,
+                pyrogram.errors.exceptions.bad_request_400.WebpageMediaEmpty,
+                pyrogram.errors.exceptions.bad_request_400.PeerIdInvalid,
+                pyrogram.errors.exceptions.bad_request_400.UsernameNotOccupied,
+                pyrogram.errors.exceptions.bad_request_400.BadRequest,
+                pyrogram.errors.exceptions.bad_request_400.MessageIdInvalid,
+            ):
                 raise
 
             except Exception as e:
-                if "stat: path should be string, bytes, os.PathLike or integer, not NoneType" in str(e):
+                if "stat: path should be string" in str(e):
                     raise
-
                 logger.exception(e)
                 raise
 
     return wrapper
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Data classes
+# ──────────────────────────────────────────────────────────────────────────────
 
 class MangaCard:
-    __slots__ = ('url', 'title', 'poster', 'msg', 'chapters', 'webs', 'data')
+    __slots__ = ("url", "title", "poster", "msg", "chapters", "webs", "data")
 
     def __init__(
-        self, 
-        webs=None, url: str = "", 
-        title: str = "", poster: str = "", 
-        msg: str = "",  chapters: list = [], 
-        data: dict = {}
+        self,
+        webs=None,
+        url: str = "",
+        title: str = "",
+        poster: str = "",
+        msg: str = "",
+        chapters=None,
+        data=None,
     ):
-        self.url = url
-        self.title = title
-        self.poster = poster
-        self.msg = msg
+        self.url      = url
+        self.title    = title
+        self.poster   = poster
+        self.msg      = msg
         self.chapters = [] if chapters is None else chapters
-        self.webs = webs
-        self.data = {} if data is None else data
+        self.webs     = webs
+        self.data     = {} if data is None else data
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"MangaCard({self.title})"
 
-    def load_to_class(self, data: dict) -> 'MangaCard':
-        slots = self.__slots__
+    def load_to_class(self, data: dict) -> "MangaCard":
         for key, val in data.items():
-            if key in slots:
+            if key in self.__slots__:
                 setattr(self, key, val)
             else:
                 self.data[key] = val
         return self
 
-
     def load_to_dict(self) -> dict:
         result = {}
-        slots = self.__slots__
-
-        for i in range(len(slots)):
-            key = slots[i]
+        for key in self.__slots__:
             if key == "data":
                 result.update(self.data)
             else:
@@ -110,440 +159,697 @@ class MangaCard:
         return result
 
     def update_dict(self, data: dict) -> None:
-        slots = self.__slots__
         for key, val in data.items():
-            if key in slots:
+            if key in self.__slots__:
                 setattr(self, key, val)
             else:
                 self.data[key] = val
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'MangaCard':
+    def from_dict(cls, data: dict) -> "MangaCard":
         obj = cls.__new__(cls)
-
-        obj.url = ""
-        obj.title = ""
-        obj.poster = ""
-        obj.msg = ""
+        obj.url      = ""
+        obj.title    = ""
+        obj.poster   = ""
+        obj.msg      = ""
         obj.chapters = []
-        obj.webs = None
-        obj.data = {}
-
+        obj.webs     = None
+        obj.data     = {}
         obj.load_to_class(data)
         return obj
 
 
 class Subscribes:
-  """A class to manage user-specific subscriptions."""
-  __slots__ = ('user_id', "manga_url", "webs", "lastest_chapter", "manga_title")
+    """Manages user-specific subscriptions."""
 
-  def __init__(self, webs: str, manga_url: str, lastest_chapter: str, manga_title: str):
-    self.manga_url: str = manga_url
-    self.manga_title: str = manga_title
-    self.webs: str = webs
-    self.lastest_chapter: str = lastest_chapter
+    __slots__ = ("user_id", "manga_url", "webs", "lastest_chapter", "manga_title")
 
-  def load_to_dict(self):
-     return {"url": self.manga_url, "title": self.manga_title, "lastest_chapter": self.lastest_chapter}
+    def __init__(
+        self,
+        webs: str,
+        manga_url: str,
+        lastest_chapter: str,
+        manga_title: str,
+        user_id: str = "",
+    ):
+        self.user_id        = user_id
+        self.manga_url      = manga_url
+        self.manga_title    = manga_title
+        self.webs           = webs
+        self.lastest_chapter = lastest_chapter
 
-
-def clean(txt, length=-1):
-    remove_char = [
-        "_", "&", ";", ":", "'", "|", "*", "?", ">", "<", "`", 
-        "!", "@", "#", "$", "%", "^", "~", "+", "=", "/", 
-        "\\", "\n",
-    ]
-    translator = txt.maketrans("", "", "".join(remove_char))
-    txt = txt.translate(translator)
-
-    txt = txt.replace("None", "")
-    txt = txt.replace(".jpg", "")
-
-    return txt[:length] if length != -1 else txt
+    def load_to_dict(self) -> dict:
+        return {
+            "url": self.manga_url,
+            "title": self.manga_title,
+            "lastest_chapter": self.lastest_chapter,
+        }
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# File-name helpers
+# ──────────────────────────────────────────────────────────────────────────────
 
-def get_file_name(data: list, setting: dict = {}):
-    regex = setting.get('regex', None)
-
-    flen = setting.get('file_name_len', "30")
+def get_file_name(data: list, setting: dict = {}) -> Tuple[str, str, str]:
+    regex = setting.get("regex")
     try:
-        flen = int(flen)
-    except Exception:
+        flen = int(setting.get("file_name_len", 30))
+    except (TypeError, ValueError):
         flen = 30
 
+    def _ep(item: dict) -> str:
+        raw = str(get_episode_number(item.get("title", "None")))
+        if not raw or raw == "None":
+            return clean(item.get("title", "None"))
+        return raw.zfill(int(regex)) if regex else raw
+
     if len(data) > 1:
-        episode_number1 = str(get_episode_number(data[0].get("title", "None")))
-        if not episode_number1 or (episode_number1 == "None"):
-            episode_number1 = clean(data[0].get("title", "None"))
-        else:
-            episode_number1 = episode_number1.zfill(int(regex)) if regex else episode_number1
-
-        episode_number2 = str(get_episode_number(data[-1].get("title", "None")))
-        if not episode_number2 or (episode_number2 == "None"):
-            episode_number2 = clean(data[-1].get("title", "None"))
-        else:
-            episode_number2 = episode_number2.zfill(int(regex)) if regex else episode_number2
-
-        episode_number = f"{episode_number1} - {episode_number2}"
+        episode_number = f"{_ep(data[0])} - {_ep(data[-1])}"
     else:
-        episode_number = str(get_episode_number(data[0].get("title", "None")))
-        if (episode_number == "None") or not episode_number:
-            episode_number = clean(data[0].get("title", "None"))
-        else:
-            episode_number = episode_number.zfill(int(regex)) if regex else episode_number
+        episode_number = _ep(data[0])
 
-    orginal_manga_title = data[0].get("manga_title", "")
-    manga_title = clean(orginal_manga_title, flen)
-
-    return orginal_manga_title, manga_title, episode_number
+    original_manga_title = data[0].get("manga_title", "")
+    manga_title = clean(original_manga_title, flen)
+    return original_manga_title, manga_title, episode_number
 
 
-async def process_thumbnail_pdf(thumb_path):
+# ──────────────────────────────────────────────────────────────────────────────
+# Thumbnail helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def process_thumbnail_pdf(thumb_path: Optional[str]) -> Optional[str]:
     import os
     from PIL import Image, ImageOps
 
     if not thumb_path or not os.path.exists(thumb_path):
         return None
-
     try:
-        img = await asyncio.to_thread(Image.open, thumb_path)
-        img = await asyncio.to_thread(lambda: img.convert("RGB"))
+        def _process():
+            img = Image.open(thumb_path).convert("RGB")
+            img = ImageOps.contain(img, (320, 320), Image.LANCZOS)
+            img = ImageOps.pad(img, (320, 320), color=(0, 0, 0))
+            img.save(thumb_path, "JPEG", quality=95)
 
-        img = await asyncio.to_thread(lambda: ImageOps.contain(img, (320, 320), Image.LANCZOS))
-
-
-        img = await asyncio.to_thread(lambda: ImageOps.pad(img, (320, 320), color=(0, 0, 0)))
-
-
-        await asyncio.to_thread(img.save, thumb_path, "JPEG", quality=95)
-
+        await asyncio.to_thread(_process)
     except Exception:
         pass
-
     return thumb_path
 
-async def load_images_(u_id, p, b_url=None, p_fn=None):
+
+def _s64_sync(b6: str, fp: str) -> Optional[str]:
     import base64
+    try:
+        if b6.startswith("data:"):
+            b6 = b6.split(",", 1)[1]
+
+        with open(fp, "wb") as f:
+            f.write(base64.b64decode(b6))
+
+        return fp
+    except Exception:
+        return None
+
+
+async def load_images_(
+    u_id,
+    p,
+    b_url=None,
+    p_fn=None,
+    us: Optional[dict] = None,
+) -> dict:
+    """
+    Resolve banner/thumbnail images for a user.
+
+    Args:
+        u_id : User Id
+        p    : poster url
+        b_url: base url
+        p_fn : poster file name
+        us   : pre-fetched user settings (fetched here if None)
+    """
     import os
 
-    s = {}
-    us = await database.get_settings(u_id)
-
     md = f"Process/{u_id}"
-    os.makedirs(md, exist_ok=True)
+    await asyncio.to_thread(os.makedirs, md, exist_ok=True)
+
+    if not us:
+        us = await database.get_settings(u_id)
 
     prs = [
-        ("banner1_file_path", us.get("banner1", None)), 
-        ("banner2_file_path", us.get("banner2", None)), 
-        ("thumb_file_name", us.get("thumb", None))
+        ("banner1_file_path", us.get("banner1")),
+        ("banner2_file_path", us.get("banner2")),
+        ("thumb_file_name",   us.get("thumb")),
     ]
 
-    def s64(b6, fp):
-        try:
-            if b6.startswith("data:"):
-                b6 = b6.split(",", 1)[1]
+    async def _s64(b6: str, fp: str) -> Optional[str]:
+        # base64-decode + file write is blocking disk I/O - keep it off the
+        # event loop so a burst of concurrent tasks doesn't stall on it.
+        return await asyncio.to_thread(_s64_sync, b6, fp)
 
-            d = base64.b64decode(b6)
-            with open(fp, "wb") as f:
-                f.write(d)
-
-            return fp
-        except Exception:
-            return None
-
-    for k, v in prs:
-        t = None
+    async def _resolve(k: str, v: Optional[str]) -> Tuple[str, Optional[str]]:
         fp = f"{md}/{k}.jpg"
         if ospath.exists(fp):
-            t = fp
-            s[k] = t
+            return k, fp
+        if not v:
+            return k, None
 
-        elif v and v.startswith("http"):
-            t = await igrone_error(thumbnali_images)(image_url=v, download_dir=md, file_name=k)
-            t = await process_thumbnail_pdf(thumb_path=t)
-            s[k] = t
+        if v.startswith("http"):
+            t = await igrone_error(thumbnali_images)(
+                image_url=v, download_dir=md, file_name=k
+            )
+            return k, await process_thumbnail_pdf(t)
 
-        elif v and v.startswith("data:image"):
-            t = s64(v, fp)
-            s[k] = t
+        if v.startswith("data:image"):
+            return k, await _s64(v, fp)
 
-        elif v and (v.startswith("/9j") or v.startswith("iVBOR") or len(v) > 500):
-            try:
-                t = s64(v, fp)
-                s[k] = t
-            except Exception:
-                t = await igrone_error(Bot.download_media)(v, file_name=fp)
-                t = await process_thumbnail_pdf(thumb_path=t)
-                s[k] = t
-
-        elif v == "constant":
-            t = await igrone_error(thumbnali_images)(image_url=p, download_dir=md, file_name=p_fn, base_url=b_url)
-            t = await process_thumbnail_pdf(thumb_path=t)
-
-            s[k] = t
-        elif v:
+        if v.startswith("/9j") or v.startswith("iVBOR") or len(v) > 500:
+            t = await _s64(v, fp)
+            if t:
+                return k, t
             t = await igrone_error(Bot.download_media)(v, file_name=fp)
-            t = await process_thumbnail_pdf(thumb_path=t)
-            s[k] = t
+            return k, await process_thumbnail_pdf(t)
 
-    return s
+        if p and v == "constant":
+            t = await igrone_error(thumbnali_images)(
+                image_url=p, download_dir="Process/Poster",
+                file_name=p_fn, base_url=b_url
+            )
+            return k, await process_thumbnail_pdf(t)
+
+        t = await igrone_error(Bot.download_media)(v, file_name=fp)
+        return k, await process_thumbnail_pdf(t)
+
+    results = await asyncio.gather(*[_resolve(k, v) for k, v in prs])
+    return dict(results)
 
 
-
+# ──────────────────────────────────────────────────────────────────────────────
+# TaskCard
+# ──────────────────────────────────────────────────────────────────────────────
 
 class TaskCard:
-    """ A class to manage user-specific tasks. """
+    """Manages a single download + conversion task."""
+    __slots__ = (
+        "data_list", "chapters_urls", "url", "poster",
+        "webs", "sts", "setting",
+        "orginal_manga_title", "manga_title", "episode_number",
+        "tasks_id", "user_id", "chat_id", "priority",
+        "update_mode", "status",
+        "main_dir", "compressed_dir",   
+    )
+
     def __init__(
-        self, webs, sts, picturesList, 
-        user_id, chat_id, priority, 
-        tasks_id=None, data_list: list = [],
+        self,
+        webs,
+        sts,
+        user_id,
+        chat_id,
+        priority,
+        tasks_id=None,
+        data_list: Optional[list] = None,
         update_mode: bool = False,
-        settings: dict = {}
+        settings: Optional[dict] = None,
     ):
-        self.picturesList = picturesList or []
-        self.poster: str = data_list[0].get("poster", "") # data
+        self.data_list      = data_list or []
+        self.chapters_urls  = [d.get("url") for d in self.data_list]
 
-        self.webs = webs
-        self.sts = sts
-        self.setting = settings
-        self.orginal_manga_title, self.manga_title, self.episode_number = get_file_name(data_list, self.setting)
-
-        if len(data_list) == 1:
-            self.url = data_list[0].get("url", "") # data
+        if len(self.chapters_urls) == 1:
+            self.url = self.chapters_urls[0]
         else:
-            self.url = f"{data_list[0].get('url', '')} - {data_list[-1].get('url', '')}"
+            self.url = self.chapters_urls[0] + "-" + self.chapters_urls[-1]
 
-        self.tasks_id = tasks_id
-        self.user_id = user_id
-        self.chat_id = chat_id
-        self.priority = priority
-        self.update_mode = update_mode
+        self.poster   = data_list[0].get("poster") if data_list else ""
+        self.webs     = webs
+        self.sts      = sts
+        self.setting  = settings or {}
 
-    def run_process(self) -> None:
-        if not self.tasks_id:
-            return 
-        if not self.webs:
-            return 
-
-        cs = getattr(self.webs, "cs", False)
-        self.main_dir = f"Process/{self.tasks_id}"
-        self.download_dir = f"{self.main_dir}/pictures"
-        self.compressed_dir = f"{self.main_dir}/compress"
-
-        self.processsing = asyncio.create_task(
-            download_and_convert_images(
-                self.picturesList, self.download_dir, 
-                self.webs.url, cs=cs
-            )
+        self.orginal_manga_title, self.manga_title, self.episode_number = get_file_name(
+            self.data_list, self.setting
         )
 
+        self.tasks_id    = tasks_id
+        self.user_id     = user_id
+        self.chat_id     = chat_id
+        self.priority    = priority
+        self.update_mode = update_mode
+        self.status      = "In Queue"
+
+        self.main_dir       = None
+        self.compressed_dir = None
 
     async def close(self) -> None:
-        if self.processsing:
-            self.processsing.cancel()
+        async def _rm() -> None:
+            if self.main_dir and ospath.exists(self.main_dir):
+                try:
+                    # rmtree is blocking disk I/O - run it off the event
+                    # loop. It also runs concurrently with release_batch()
+                    # below (they're independent), which shaves latency off
+                    # close() - and close() is what frees this user's
+                    # ongoing-task slot for their next queued item.
+                    await asyncio.to_thread(shutil.rmtree, self.main_dir, ignore_errors=True)
+                except Exception as e:
+                    logger.warning(f"TaskCard.close() error for {self.tasks_id}: {e}")
 
-        shutil.rmtree(self.main_dir, ignore_errors=True)
-        if self.sts:
-            await igrone_error(self.sts.delete)()
+        await asyncio.gather(_rm(), ihandler.release_batch(self.chapters_urls))
 
+    def schedule_order(self) -> None:
+        self.main_dir       = f"Process/{self.tasks_id}"
+        self.compressed_dir = f"{self.main_dir}/compress"
+        ihandler.order_batch(str(self.user_id), self.webs, [(d.get("url"), d) for d in self.data_list])
+
+    async def get_images_paths(self) -> Optional[list]:
+        for attempt in range(1, 4):
+            try:
+                chapters     = await ihandler.get_batch(self.chapters_urls)
+                images_paths = list(chain.from_iterable(chapters))
+            except Exception as e:
+                # get_batch() raises once a chapter fails all of its own
+                # internal retries. Without catching this here, the
+                # exception blew straight past this whole retry loop on
+                # the very first attempt, so schedule_order()'s re-queue
+                # never actually got a chance to run - and if the caller
+                # of get_images_paths() didn't also catch it, the task
+                # never reached close(), permanently leaking the reader
+                # counts get_batch() had already acquired for any chapters
+                # that DID succeed.
+                logger.warning(
+                    f"get_batch failed for task {self.tasks_id} "
+                    f"(attempt {attempt}): {e}"
+                )
+                images_paths = []
+
+            if images_paths:
+                return images_paths
+
+            self.status = f"Downloading {len(self.chapters_urls)} chapters (retry {attempt})"
+            ihandler.order_batch(str(self.user_id), self.webs, [(d.get("url"), d) for d in self.data_list])
+            await asyncio.sleep(10)
+
+        return None
 
     async def get_banner(self) -> dict:
-        tasks = await asyncio.gather(
-            load_images_(
-                self.user_id, 
-                self.poster, 
-                self.webs.url, 
-                self.manga_title
-            )
-        )
-        return tasks[0]
+        try:
+            us = await database.get_settings(self.user_id)
+            if not isinstance(us, dict):
+                return {}
+
+            kwargs: dict = {
+                "u_id":  self.user_id,
+                "p":     None,
+                "b_url": self.webs.url,
+                "p_fn":  self.manga_title,
+                "us":    us,
+            }
+
+            poster_url = None
+            is_constant = str(us.get("thumb")) == "constant"
+
+            if is_constant and self.poster:
+                entry = await ihandler.get_storage(self.poster)
+                if entry is not None:
+                    poster_url = entry
+                    await ihandler.release_storage(self.poster)
+
+            if not poster_url:
+                kwargs["p"] = self.poster
+
+            rdata = await asyncio.wait_for(load_images_(**kwargs), 10 * 60)
+
+            if is_constant and rdata.get("thumb_file_name"):
+                await ihandler.set_storage(self.poster, rdata["thumb_file_name"])
+
+            if poster_url:
+                rdata["thumb_file_name"] = poster_url
+
+            return rdata
+        except asyncio.TimeoutError:
+            return {}
+
+        except Exception as er:
+            logger.exception(f"Error in get_banner: {er}")
+            return {}
 
 
-
+# ──────────────────────────────────────────────────────────────────────────────
+# AQueue
+# ──────────────────────────────────────────────────────────────────────────────
 
 class AQueue:
-    __slots__ = ('storage_data', 'data_users', 'ongoing_tasks', 'maxsize')
+    __slots__ = (
+        "storage_data", "ongoing_tasks",
+        "maxsize", "_sorted_dirty", "_event",
+        "_lock", "_rr_queues", "_rr_users", "_rr_idx"
+    )
 
     def __init__(self, maxsize: Optional[int] = None):
-        self.storage_data: Dict[str, Tuple[TaskCard, bool]] = {}  # {task_id: TaskCard, True}
-        #self.data_users: Dict[int, List[str]] = {}  # {user_id: [task_ids]}
-        self.ongoing_tasks: Dict[str, TaskCard] = {} # {user_id: TaskCard}
-        self.maxsize = maxsize
+        
+        # task_id -> (TaskCard, is_update)
+        self.storage_data:  Dict[str, Tuple[TaskCard, bool]] = {}
 
-    async def get_random_id(self) -> str:
-        """Generate unique 7-char task ID"""
-        chars = string.ascii_letters + string.digits + "s"
+        # user_id -> List[TaskCard]  (multiple ongoing per user, one per worker)
+        self.ongoing_tasks: Dict[str, list]                  = {}
+        self.maxsize       = maxsize
+        self._sorted_dirty = False
+        self._event        = asyncio.Event()
+        self._lock         = asyncio.Lock()
+
+        # RR Scheduler structures
+        self._rr_queues: Dict[str, Dict[int, collections.deque]] = {}
+        self._rr_users: List[str] = []
+        self._rr_idx: int = 0
+
+    # ── internal helpers ──────────────────────────────────────────────────────
+
+    def _get_effective_priority(self, task: TaskCard) -> int:
+        if task.update_mode:
+            return 3
+        if len(task.data_list) == 1:
+            return 1
+        return 2
+
+    async def _random_id(self) -> str:
+        chars = string.ascii_letters + string.digits
         while True:
-            task_id = ''.join(random.choices(chars, k=7))
-            if task_id not in self.storage_data and task_id not in self.ongoing_tasks:
-                return task_id
+            tid = "".join(random.choices(chars, k=7))
+            # check both pending and ongoing task IDs
+            ongoing_ids = {
+                t.tasks_id
+                for tasks in self.ongoing_tasks.values()
+                for t in tasks
+            }
+            if tid not in self.storage_data and tid not in ongoing_ids:
+                return tid
+
+    def _resort(self) -> None:
+        if not self._sorted_dirty:
+            return
+
+        self.storage_data = dict(
+            natsorted(
+                self.storage_data.items(),
+                key=lambda x: x[1][0].episode_number,
+                alg=ns.REAL,
+            )
+        )
+
+        # Rebuild _rr_queues to guarantee sync and correct order
+        self._rr_queues.clear()
+
+        active_uids = []
+        for task_id, (task, _) in self.storage_data.items():
+            uid = str(task.user_id)
+            if uid not in self._rr_queues:
+                self._rr_queues[uid] = {1: collections.deque(), 2: collections.deque(), 3: collections.deque()}
+                active_uids.append(uid)
+
+            pri = self._get_effective_priority(task)
+            self._rr_queues[uid][pri].append(task_id)
+
+        new_rr_users = []
+        for uid in self._rr_users:
+            if uid in self._rr_queues:
+                new_rr_users.append(uid)
+
+        existing = set(new_rr_users)
+        for uid in active_uids:
+            if uid not in existing:
+                new_rr_users.append(uid)
+
+        self._rr_users = new_rr_users
+        if self._rr_users:
+            self._rr_idx = self._rr_idx % len(self._rr_users)
+        else:
+            self._rr_idx = 0
+
+        self._sorted_dirty = False
+
+    # ── public API ────────────────────────────────────────────────────────────
 
     async def put(self, tasks: TaskCard, updates: bool = False) -> str:
-        """Add task to queue"""
-
         if self.maxsize and len(self.storage_data) >= self.maxsize:
             raise asyncio.QueueFull("Queue full")
 
-        await database.ensure_user(tasks.user_id)
-        tasks.tasks_id = await self.get_random_id()
+        async with self._lock:
+            await database.ensure_user(tasks.user_id)
+            tasks.tasks_id = await self._random_id()
 
-        if not tasks.setting:
-            tasks.setting = await database.get_settings(tasks.user_id)
+            if not tasks.setting:
+                tasks.setting = await database.get_settings(tasks.user_id)
 
-        self.storage_data[tasks.tasks_id] = (tasks, updates)
+            self.storage_data[tasks.tasks_id] = (tasks, updates)
+            self._sorted_dirty = True
+            tasks.schedule_order()
+            self._event.set()
 
-        if Vars.IS_PRIVATE:
-            tasks.run_process()
+        # Notify per-user worker pool (lazy import to avoid circular dependency)
+        try:
+            from Tools.cworker import notify_user_task  # noqa: PLC0415
+            asyncio.get_running_loop().create_task(
+                notify_user_task(str(tasks.user_id))
+            )
+        except RuntimeError:
+            pass  # no running loop yet (startup tests)
+        except Exception:
+            pass  # cworker not yet initialised
+
+        # Persist to Redis (no-op if Redis unavailable)
+        try:
+            from Tools.redis_queue import rq  # noqa: PLC0415
+            asyncio.get_running_loop().create_task(
+                rq.push(tasks.tasks_id, {
+                    "task_id":      tasks.tasks_id,
+                    "user_id":      str(tasks.user_id),
+                    "chat_id":      str(tasks.chat_id),
+                    "webs_sf":      tasks.webs.sf if tasks.webs else "",
+                    "chapter_urls": tasks.chapters_urls,
+                    "data_list":    tasks.data_list,
+                    "update_mode":  tasks.update_mode,
+                    "settings":     tasks.setting or {},
+                })
+            )
+        except RuntimeError:
+            pass
+        except Exception:
+            pass
 
         return tasks.tasks_id
 
-    def get_available_tasks(self, user_id=None):
-        def extract_sort_value(item):
-            if item is None:
-                return (2, 0)  # Put None at end
-            if isinstance(item, int):
-                return (0, item)  # Type 0 for integers
-            elif isinstance(item, str):
-                s = str(item).lower()
-                if s == 'none':
-                    return (2, 0)  # Put 'None' at end
-                elif '-' in s:
-                    # For "10-11", take the first number
-                    try:
-                        num = int(s.split('-')[0])
-                        return (1, num)  # Type 1 for hyphenated strings
-                    except Exception:
-                        return (3, s)  # Type 3 for other strings
-                else:
-                    # For other strings like "222", "333"
-                    try:
-                        num = int(s)
-                        return (0, num)  # Same as integers
-                    except Exception:
-                        return (3, s)  # Can't convert, sort alphabetically
-            else:
-                return (3, str(item))  # Other types
+    def get_next_shared_task(self) -> Optional[Tuple[TaskCard, bool]]:
+        """
+        Fetch task for shared workers using Fair Round-Robin Scheduling.
+        Ensures workers are divided equally among active users.
+        """
+        if psutil.virtual_memory().percent > 90.0:
+            return None
 
-        # Get all tasks
-        all_tasks = []
-        for task, is_completed in self.storage_data.values():
-            if user_id is None or task.user_id == user_id:
-                all_tasks.append((task, is_completed))
+        if self._sorted_dirty:
+            self._resort()
 
-        # Filter out ongoing tasks
-        available_tasks = [
-            (task, is_completed) for task, is_completed in all_tasks
-            if task.user_id not in self.ongoing_tasks
-        ]
+        if not self._rr_users:
+            return None
 
-        # Sort by episode_number
-        available_tasks.sort(key=lambda x: extract_sort_value(x[0].episode_number))
+        # Calculate active users (users with pending or ongoing tasks)
+        active_uids = set(self._rr_users)
+        for uid, tasks in self.ongoing_tasks.items():
+            if tasks:
+                active_uids.add(uid)
 
-        return available_tasks[0] if available_tasks else None
+        active_users_count = len(active_uids)
+        if active_users_count == 0:
+            return None
 
-    async def get(self, worker_id: int) -> Tuple[TaskCard, bool]:
-        """Get next available task with better error handling"""
-        while True:
+        shared_workers = 15
+        max_concurrent = max(1, shared_workers // active_users_count + (1 if shared_workers % active_users_count else 0))
+        n_users = len(self._rr_users)
+
+        # Two-pass approach:
+        # Pass 1 (strict_mode=True): Enforce fairness limit (max_concurrent) for batch tasks.
+        # Pass 2 (strict_mode=False): Ignore limit to ensure 100% worker utilization if some users don't have enough tasks.
+        for strict_mode in (True, False):
+            for pri in [1, 2, 3]:
+                # Single chapters (pri=1) bypass the limit entirely to ensure responsiveness
+                if not strict_mode and pri == 1:
+                    continue
+
+                users_checked = 0
+                while users_checked < n_users:
+                    uid = self._rr_users[self._rr_idx]
+
+                    if strict_mode and pri > 1:
+                        current_ongoing = len(self.ongoing_tasks.get(uid, []))
+                        if current_ongoing >= max_concurrent:
+                            self._rr_idx = (self._rr_idx + 1) % n_users
+                            users_checked += 1
+                            continue
+
+                    queue_pri = self._rr_queues[uid][pri]
+                    task_id = None
+                    while queue_pri:
+                        tid = queue_pri[0]
+                        if tid in self.storage_data:
+                            task_id = tid
+                            break
+                        else:
+                            queue_pri.popleft() # Discard invalid
+
+                    if task_id:
+                        # Found a valid task!
+                        queue_pri.popleft()
+                        task, is_update = self.storage_data.pop(task_id)
+                        self.ongoing_tasks.setdefault(uid, []).append(task)
+
+                        self._rr_idx = (self._rr_idx + 1) % n_users
+                        return task, is_update
+
+                    self._rr_idx = (self._rr_idx + 1) % n_users
+                    users_checked += 1
+
+        return None
+
+    async def task_done(self, task: TaskCard):
+        # We need this for cworker compatibility.
+        # Let's remove from ongoing
+        uid = str(task.user_id)
+        if uid in self.ongoing_tasks:
             try:
-                if not self.storage_data:
-                    await asyncio.sleep(0.9)
-                    continue
+                self.ongoing_tasks[uid].remove(task)
+            except ValueError:
+                pass
+            if not self.ongoing_tasks[uid]:
+                del self.ongoing_tasks[uid]
+        await self.delete_task(task.tasks_id)
 
-                available_task = self.get_available_tasks()
+    def get_user_task(
+        self, user_id: str, max_concurrent: int = 2
+    ) -> Optional[Tuple[TaskCard, bool]]:
+        """
+        Return next pending task for *user_id* if the user has fewer than
+        *max_concurrent* tasks currently running, otherwise None.
 
-                if not available_task:
-                    await asyncio.sleep(0.1)
-                    continue
+        This is called by each per-user worker instead of the old
+        get_available_tasks() that was used by global workers.
+        """
+        if psutil.virtual_memory().percent > 90.0:
+            return None
 
-                self.ongoing_tasks[available_task[0].user_id] = available_task[0]
-                del self.storage_data[str(available_task[0].tasks_id)]
+        self._resort()
+        user_ongoing = self.ongoing_tasks.get(user_id, [])
+        if len(user_ongoing) >= max_concurrent:
+            return None
 
-                return available_task
+        for task_id, (task, is_update) in list(self.storage_data.items()):
+            if str(task.user_id) != str(user_id):
+                continue
 
-            except Exception as e:
-                logger.exception(f"Error in queue get: {e}")
-                await asyncio.sleep(1)
+            # Claim the slot
+            self.ongoing_tasks.setdefault(user_id, []).append(task)
+            del self.storage_data[task_id]
+            return task, is_update
 
+        return None
+
+    # kept for backward-compat (used by auto-update worker)
+    def get_available_tasks(
+        self, user_id=None
+    ) -> Optional[Tuple[TaskCard, bool]]:
+        # This was previously returning only 1 task max for the auto update worker.
+        # Now changing it to 1 max concurrent task for the auto update worker as requested.
+        if psutil.virtual_memory().percent > 90.0:
+            return None
+
+        self._resort()
+        for task_id, (task, is_update) in list(self.storage_data.items()):
+            if user_id is not None and task.user_id != user_id:
+                continue
+
+            uid = str(task.user_id)
+            user_ongoing = self.ongoing_tasks.get(uid, [])
+            # allow only 1 slot via legacy path (update worker) as requested
+            if len(user_ongoing) >= 1:
+                continue
+
+            self.ongoing_tasks.setdefault(uid, []).append(task)
+            del self.storage_data[task_id]
+            return task, is_update
+
+        return None
 
     async def delete_task(self, task_id: str) -> bool:
-        """Delete specific task"""
         if task_id in self.storage_data:
-            if self.storage_data[task_id][1] is not True:
-                task_card, _ = self.storage_data.pop(task_id)
+            task_card, _ = self.storage_data.pop(task_id)
 
-                await igrone_error(task_card.close)()
+            # Remove from RR queue safely if we can
+            uid = str(task_card.user_id)
+            if uid in self._rr_queues:
+                pri = self._get_effective_priority(task_card)
+                if task_id in self._rr_queues[uid][pri]:
+                    pass
 
-                if task_id in self.ongoing_tasks:
-                    del self.storage_data[task_id]
-
+            await igrone_error(task_card.close)()
             return True
 
+        # Check ongoing and remove if it is just a close
+        for uid, tasks_list in list(self.ongoing_tasks.items()):
+            for i, t in enumerate(tasks_list):
+                if str(t.tasks_id) == str(task_id):
+                    # We shouldn't remove it here if it's meant to prevent cancellation,
+                    # but if it's actually finished, task_done handles the removal.
+                    return True
         return False
 
     async def delete_tasks(self, user_id: int) -> int:
-        """Delete all tasks for user"""
-        async def check_delete(str_, tuple_task_card):
-            try:
-                del self.storage_data[str_]
-                task_card = tuple_task_card[0]
-
-                await igrone_error(task_card.close)()
-
-                return None
-            except Exception as e:
-                logger.exception(f"Error deleting task {str_}: {e}")
-                return None
-
-        process_ = [
-            asyncio.wait_for(asyncio.create_task(check_delete(str_, tuple_task_card)),
-                20
-            )
-            for str_, tuple_task_card in self.storage_data.items()
-            if str(tuple_task_card[0].user_id) == str(user_id)
+        uid_str = str(user_id)
+        targets = [
+            (tid, pair)
+            for tid, pair in list(self.storage_data.items())
+            if str(pair[0].user_id) == uid_str
         ]
 
-        await asyncio.gather(*process_, return_exceptions=True)
+        async def _del(tid: str, pair: Tuple[TaskCard, bool]) -> None:
+            try:
+                self.storage_data.pop(tid, None)
+                # Note: popleft in scheduler logic will clean up RR queue automatically
+                # since the task is no longer in storage_data.
+                await igrone_error(pair[0].close)()
+            except Exception as e:
+                logger.exception(f"Error deleting task {tid}: {e}")
 
-        return len(process_)
+        await asyncio.gather(
+            *(asyncio.wait_for(_del(tid, pair), 20) for tid, pair in targets),
+            return_exceptions=True,
+        )
+        return len(targets)
 
     def get_count(self, user_id: int = 0) -> int:
-        """Get user's pending task count or total Users in queue"""
         try:
             if user_id == 0:
-                # Count unique users with pending tasks
-                unique_users = set()
-
-                for task, is_completed in self.storage_data.values():
-                    if task.user_id not in unique_users:
-                        unique_users.add(int(task.user_id))
-
-
-                for task, is_completed in self.storage_data.values():
-                    if task.user_id not in unique_users:
-                        unique_users.add(int(task.user_id))
-
-                for task in self.ongoing_tasks.values():
-                    if task.user_id not in unique_users:
-                        unique_users.add(int(task.user_id))
-
-                return len(unique_users)
+                unique: set = set()
+                for task, _ in self.storage_data.values():
+                    unique.add(int(task.user_id))
+                for tasks_list in self.ongoing_tasks.values():
+                    for task in tasks_list:
+                        unique.add(int(task.user_id))
+                return len(unique)
             else:
-                user_id_str = str(user_id)  # Convert to string if stored as string
-
-                ongoing_tasks = sum(1 for task in self.ongoing_tasks.values() if str(task.user_id) == user_id_str)
-                total_tasks = ongoing_tasks + sum(1 for task, completed in self.storage_data.values() if str(task.user_id) == user_id_str)
-                return total_tasks
-
-
-
+                uid_str = str(user_id)
+                pending = sum(
+                    1 for task, _ in self.storage_data.values()
+                    if str(task.user_id) == uid_str
+                )
+                ongoing = len(self.ongoing_tasks.get(uid_str, []))
+                return pending + ongoing
         except (ValueError, TypeError, AttributeError) as e:
             logger.error(f"Error counting tasks for user {user_id}: {e}")
             return 0
 
     def task_exists(self, task_id: str) -> bool:
-        """Check if task exists"""
-        return task_id in self.storage_data or task_id in self.ongoing_tasks
+        if task_id in self.storage_data:
+            return True
+        for tasks_list in self.ongoing_tasks.values():
+            for t in tasks_list:
+                if str(t.tasks_id) == str(task_id):
+                    return True
+        return False
 
     def qsize(self) -> int:
         return len(self.storage_data)
@@ -552,258 +858,259 @@ class AQueue:
         return not self.storage_data
 
     async def task_done(self, tasks_card: TaskCard) -> bool:
-        """Mark task as done"""
-        if tasks_card.user_id in self.ongoing_tasks:
-            del self.ongoing_tasks[tasks_card.user_id]
-            if tasks_card.tasks_id in self.storage_data:
-                 self.storage_data.pop(str(tasks_card.tasks_id))
+        uid = str(tasks_card.user_id)
+        user_ongoing = self.ongoing_tasks.get(uid, [])
+        if tasks_card in user_ongoing:
+            user_ongoing.remove(tasks_card)
+            if not user_ongoing:
+                self.ongoing_tasks.pop(uid, None)
+            await igrone_error(tasks_card.close)()
+            self.storage_data.pop(str(tasks_card.tasks_id), None)
+            self._event.set()
+            # Acknowledge in Redis (no-op if Redis unavailable)
+            try:
+                from Tools.redis_queue import rq  # noqa: PLC0415
+                asyncio.get_running_loop().create_task(
+                    rq.ack(str(tasks_card.tasks_id))
+                )
+            except Exception:
+                pass
             return True
-
         return False
 
     def get_ongoing_count(self, user_id: int) -> int:
-        """Get user's ongoing task count"""
-        return sum(1 for t in self.ongoing_tasks.values() if int(t.user_id) == user_id)
+        uid_str = str(user_id)
+        return len(self.ongoing_tasks.get(uid_str, []))
 
+    def check_queue(self, user_id: int) -> bool:
+        uid = int(user_id)
+        return any(int(pair[0].user_id) == uid for pair in self.storage_data.values())
 
-    def check_queue(self, user_id) -> bool:
-        return any(int(task[0].user_id) == user_id for task in list(self.storage_data.values()))
+    def check_poster(self, poster_url: str) -> bool:
+        """
+        True: Mean Donot Delete 
+        False: Mean Delete
+        """
+        try:
+            return any(pair[0].poster == poster_url for pair in self.storage_data.values())
+        except Exception as e:
+            logger.exception(e)
+
+        return False
 
 
 queue = AQueue()
 
 
-""" Make By AI """
-class TTLCache:
+# ──────────────────────────────────────────────────────────────────────────────
+# TTLCache
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TTLCache(MutableMapping):
     """
-    A dictionary-like class that automatically removes entries after a specified time.
+    Lightweight TTL cache backed by OrderedDict.
 
-    Features:
-    - Behaves like a regular dictionary (supports get, set, delete, membership tests)
-    - Each entry has its own expiration time
-    - Automatic cleanup of expired entries
-    - Thread-safe operations
+    All mutations (set/delete/expire) are done inside a single RLock
+    acquisition so every operation is atomic from the caller's perspective.
+
+    Args
+    ----
+    default_timeout  : float  seconds until an entry expires (default 2 h)
+    cleanup_interval : float  background sweep interval in seconds; 0 = disabled
+    maxsize          : int    cap on live entries; None = unlimited
     """
 
-    def __init__(self, default_timeout=60, cleanup_interval=30):
-        """
-        Initialize the TimedDict.
-
-        Args:
-            default_timeout (int): Default time in seconds after which entries expire
-            cleanup_interval (int): How often to run cleanup in seconds (0 to disable)
-        """
-        self._dict = {}  # Main storage: key -> (value, expiry_time)
+    def __init__(
+        self,
+        default_timeout: float = 7200.0,
+        cleanup_interval: float = 0.0,
+        maxsize: Optional[int] = None,
+    ) -> None:
+        self._data: OrderedDict[Any, Tuple[Any, float]] = OrderedDict()
         self._default_timeout = default_timeout
-        self._lock = Lock()
-
-        # Start periodic cleanup if interval > 0
+        self._maxsize         = maxsize
+        self._lock            = RLock()
         self._cleanup_interval = cleanup_interval
+        self._timer: Optional[Timer] = None
         if cleanup_interval > 0:
             self._start_cleanup_timer()
 
-    def _start_cleanup_timer(self):
-        """Start the periodic cleanup timer."""
-        self._cleanup_timer = Timer(self._cleanup_interval, self._cleanup)
-        self._cleanup_timer.daemon = True
-        self._cleanup_timer.start()
+    # ── timer ─────────────────────────────────────────────────────────────────
 
-    def _cleanup(self):
-        """Remove all expired entries."""
-        current_time = time.time()
-        with self._lock:
-            # Collect keys to delete
-            keys_to_delete = [
-                key for key, (_, expiry) in self._dict.items()
-                if expiry <= current_time
-            ]
-            # Delete expired keys
-            for key in keys_to_delete:
-                del self._dict[key]
+    def _start_cleanup_timer(self) -> None:
+        self._timer = Timer(self._cleanup_interval, self._periodic_cleanup)
+        self._timer.daemon = True
+        self._timer.start()
 
-        # Restart timer if still needed
+    def _periodic_cleanup(self) -> None:
+        self._remove_expired()
         if self._cleanup_interval > 0:
             self._start_cleanup_timer()
 
-    def __getitem__(self, key):
-        """Get value for key, raising KeyError if expired or not found."""
+    # ── expiry helpers ────────────────────────────────────────────────────────
+
+    def _remove_expired(self) -> None:
+        """Remove all expired entries under a single lock acquisition."""
+        now = time.monotonic()
         with self._lock:
-            if key not in self._dict:
+            expired = [k for k, (_, exp) in self._data.items() if exp <= now]
+            for k in expired:
+                self._data.pop(k, None)
+
+    def _evict_if_full(self) -> None:
+        """Evict oldest entries while over capacity. Caller holds _lock."""
+        if self._maxsize is None:
+            return
+        while len(self._data) > self._maxsize:
+            self._data.popitem(last=False)
+
+    def _get_expiry(self, timeout: Optional[float] = None) -> float:
+        t = timeout if timeout is not None else self._default_timeout
+        return time.monotonic() + max(0.0, t)
+
+    # ── core MutableMapping interface ─────────────────────────────────────────
+
+    def __getitem__(self, key: Any) -> Any:
+        with self._lock:
+            if key not in self._data:
                 raise KeyError(key)
-
-            value, expiry = self._dict[key]
-            if time.time() > expiry:
-                # Entry has expired
-                del self._dict[key]
-                raise KeyError(f"Key '{key}' has expired")
-
+            value, expiry = self._data[key]
+            if time.monotonic() > expiry:
+                del self._data[key]
+                raise KeyError(key)
+            self._data.move_to_end(key)
             return value
 
-    def __setitem__(self, key, value):
-        """Set value with default timeout."""
-        self.set(key, value, self._default_timeout)
+    def __setitem__(self, key: Any, value: Any) -> None:
+        self.set(key, value)
 
-    def set(self, key, value, timeout=None):
-        """
-        Set a key with optional custom timeout.
-
-        Args:
-            key: The key to set
-            value: The value to store
-            timeout: Custom timeout in seconds (uses default_timeout if None)
-        """
-        expiry = time.time() + (timeout if timeout is not None else self._default_timeout)
+    def set(self, key: Any, value: Any, timeout: Optional[float] = None) -> None:
+        expiry = self._get_expiry(timeout)
         with self._lock:
-            self._dict[key] = (value, expiry)
+            self._data[key] = (value, expiry)
+            self._data.move_to_end(key)
+            self._evict_if_full()
 
-    def __delitem__(self, key):
-        """Delete a key."""
+    def __delitem__(self, key: Any) -> None:
         with self._lock:
-            del self._dict[key]
+            del self._data[key]
 
-    def __contains__(self, key):
-        """Check if key exists and is not expired."""
-        try:
-            self.__getitem__(key)
+    def __contains__(self, key: Any) -> bool:
+        with self._lock:
+            if key not in self._data:
+                return False
+            _, expiry = self._data[key]
+            if time.monotonic() > expiry:
+                del self._data[key]
+                return False
             return True
-        except KeyError:
-            return False
 
-    def get(self, key, default=None):
-        """Get value with default if key doesn't exist or is expired."""
+    def get(self, key: Any, default: Any = None) -> Any:
         try:
-            return self.__getitem__(key)
+            return self[key]
         except KeyError:
             return default
 
-    def pop(self, key, default=None):
-        """
-        Remove and return value for key.
-        Returns default if key doesn't exist or is expired.
-        """
-        try:
-            value = self.__getitem__(key)
-            with self._lock:
-                del self._dict[key]
+    def pop(self, key: Any, default: Any = None) -> Any:
+        with self._lock:
+            item = self._data.pop(key, None)
+            if item is None:
+                return default
+            value, expiry = item
+            if time.monotonic() > expiry:
+                return default
             return value
-        except KeyError:
-            return default
+
+    # ── iteration helpers ─────────────────────────────────────────────────────
+
+    def _live_snapshot(self) -> list[Tuple[Any, Any]]:
+        now = time.monotonic()
+        with self._lock:
+            return [(k, v) for k, (v, exp) in self._data.items() if exp > now]
 
     def keys(self):
-        """Return list of non-expired keys."""
-        current_time = time.time()
-        with self._lock:
-            # First clean up expired entries
-            keys_to_delete = [
-                key for key, (_, expiry) in self._dict.items()
-                if expiry <= current_time
-            ]
-            for key in keys_to_delete:
-                del self._dict[key]
-
-            return list(self._dict.keys())
+        return [k for k, _ in self._live_snapshot()]
 
     def values(self):
-        """Return list of non-expired values."""
-        current_time = time.time()
-        with self._lock:
-            values = []
-            keys_to_delete = []
-
-            for key, (value, expiry) in self._dict.items():
-                if expiry > current_time:
-                    values.append(value)
-                else:
-                    keys_to_delete.append(key)
-
-            # Clean up expired entries
-            for key in keys_to_delete:
-                del self._dict[key]
-
-            return values
+        return [v for _, v in self._live_snapshot()]
 
     def items(self):
-        """Return list of (key, value) pairs for non-expired entries."""
-        current_time = time.time()
+        return self._live_snapshot()
+
+    def __len__(self) -> int:
+        now = time.monotonic()
         with self._lock:
-            items = []
-            keys_to_delete = []
+            expired = [k for k, (_, exp) in self._data.items() if exp <= now]
+            for k in expired:
+                self._data.pop(k, None)
+            return len(self._data)
 
-            for key, (value, expiry) in self._dict.items():
-                if expiry > current_time:
-                    items.append((key, value))
-                else:
-                    keys_to_delete.append(key)
-
-            # Clean up expired entries
-            for key in keys_to_delete:
-                del self._dict[key]
-
-            return items
-
-    def __len__(self):
-        """Return number of non-expired entries."""
-        return len(self.keys())
-
-    def __iter__(self):
-        """Iterate over non-expired keys."""
+    def __iter__(self) -> Iterator[Any]:
         return iter(self.keys())
 
-    def clear(self):
-        """Remove all entries."""
+    def clear(self) -> None:
         with self._lock:
-            self._dict.clear()
+            self._data.clear()
 
-    def update(self, other_dict):
-        """Update with another dictionary, using default timeout."""
+    def update(self, other: dict) -> None:
+        if not other:
+            return
+        now     = time.monotonic()
+        timeout = self._default_timeout
         with self._lock:
-            for key, value in other_dict.items():
-                self[key] = value
+            for k, v in other.items():
+                self._data[k] = (v, now + max(0.0, timeout))
+                self._data.move_to_end(k)
+            self._evict_if_full()
 
-    def setdefault(self, key, default=None):
-        """
-        Get value if key exists, otherwise set to default and return default.
-        """
-        try:
-            return self.__getitem__(key)
-        except KeyError:
-            self[key] = default
+    def setdefault(self, key: Any, default: Any = None) -> Any:
+        with self._lock:
+            if key in self._data:
+                value, expiry = self._data[key]
+                if time.monotonic() <= expiry:
+                    self._data.move_to_end(key)
+                    return value
+            expiry = self._get_expiry()
+            self._data[key] = (default, expiry)
+            self._data.move_to_end(key)
+            self._evict_if_full()
             return default
 
-    def get_expiry_time(self, key):
-        """
-        Get expiry time for a key as timestamp.
-        Returns None if key doesn't exist.
-        """
-        with self._lock:
-            if key in self._dict:
-                return self._dict[key][1]
-            return None
+    # ── convenience extras ────────────────────────────────────────────────────
 
-    def refresh_key(self, key, timeout=None):
-        """
-        Reset the expiry time for an existing key.
-        Returns True if successful, False if key doesn't exist.
-        """
+    def get_expiry_time(self, key: Any) -> Optional[float]:
         with self._lock:
-            if key in self._dict:
-                value, _ = self._dict[key]
-                expiry = time.time() + (timeout if timeout is not None else self._default_timeout)
-                self._dict[key] = (value, expiry)
-                return True
-            return False
+            item = self._data.get(key)
+            if item is not None:
+                _, exp = item
+                if time.monotonic() <= exp:
+                    return exp
+        return None
 
-    def __repr__(self):
-        """String representation."""
-        items = self.items()
-        return f"TimedDict({dict(items)})"
+    def refresh_key(self, key: Any, timeout: Optional[float] = None) -> bool:
+        with self._lock:
+            item = self._data.get(key)
+            if item is not None:
+                value, exp = item
+                if time.monotonic() <= exp:
+                    self._data[key] = (value, self._get_expiry(timeout))
+                    self._data.move_to_end(key)
+                    return True
+        return False
+
+    # ── context manager + lifecycle ───────────────────────────────────────────
+
+    def __repr__(self) -> str:
+        return f"TTLCache({dict(self.items())})"
 
     def __enter__(self):
-        """Context manager entry."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - clean up."""
+    def __exit__(self, *_):
         self.clear()
-        if hasattr(self, '_cleanup_timer'):
-            self._cleanup_timer.cancel()
+        if self._timer and self._timer.is_alive():
+            self._timer.cancel()
+
+    def __del__(self):
+        if self._timer and self._timer.is_alive():
+            self._timer.cancel()

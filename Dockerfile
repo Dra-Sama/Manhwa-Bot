@@ -1,26 +1,24 @@
-FROM python:3.10
-
+FROM ghcr.io/astral-sh/uv:python3.12-dhi
 WORKDIR /app
 
-RUN apt update && apt install -y \
-    tor \
-    git \
-    libavif-dev \
-    libjpeg-dev \
-    libpng-dev \
-    libtiff-dev \
-    libwebp-dev \
-    libfreetype6-dev \
-    libopenjp2-7-dev \
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_NO_CACHE=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc git wget curl pv jq \
+        libssl-dev libcurl4-openssl-dev libnghttp2-dev ca-certificates \
+        libavif-dev libjpeg-dev libpng-dev libtiff-dev libwebp-dev \
+        libfreetype6-dev libopenjp2-7-dev \
+        python3-dev python3-tk \
+        tor \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install --upgrade pip setuptools wheel
-
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt
-
-RUN python -m pip install --no-cache-dir --upgrade Pillow
+RUN uv pip install -r requirements.txt --system
 
 COPY . /app
+RUN chmod +x /app/start.sh
 
-CMD ["bash", "-c", "tor & exec bash start.sh"]
+# Consider adding a non-root user instead of running as root
+CMD ["python", "main.py"]

@@ -1,3 +1,4 @@
+# Code By @V_Sbotmaker (on Telegram)
 import time
 import string
 import random
@@ -31,7 +32,7 @@ def token_sync():
 
 async def get_premuims():
     users_id_list = []
-
+    
     # Get premium users from database
     async for user_id, data in database.get_all_premuim():
         # Check if premium user hasn't expired
@@ -40,7 +41,7 @@ async def get_premuims():
                 users_id_list.append(int(user_id))
             except:
                 pass
-
+    
     users_id_list = users_id_list + Vars.ADMINS
     return users_id_list
 
@@ -56,11 +57,11 @@ def get_short(url):
         api_url = Vars.SHORTENER_API
         if not isinstance(api_url, str):
             api_url = random.choice(api_url)
-
+        
         xurl = api_url.replace("{}", url)
-
+        
         rjson = requests.get(xurl).json()
-
+        
         return rjson["shortenedUrl"]
 
     except requests.RequestException as e:
@@ -116,7 +117,7 @@ def check_token_(func):
                     return await get_token(sts, message.from_user.id)
         else:
             return await func(client, message, *args, **kwargs)
-
+    
     return wrapper
 
 
@@ -141,7 +142,7 @@ async def verify_token(message, user_id, token):
                             InlineKeyboardButton("ᴄʟᴏsᴇ", callback_data="close")
                         ],
                     ])
-
+                    
                     return await message.edit(
                         Vars.BYPASS_TXT,
                         reply_markup=keyboard
@@ -165,13 +166,13 @@ async def get_token(message, user_id):
                 await Bot.delete_messages(int(chat_id), int(tks[user_id]["msg_id"]))
             except:
                 pass
-
+    
     new_token = generate_token()
-
+    
     token_link = f"https://telegram.me/{Bot.username}?start={new_token}"
     short_token_link = get_short(token_link)
     save_token(user_id, new_token, message.id, message.chat.id, short_token_link)
-
+    
     button = InlineKeyboardButton("ɢᴇᴛ ᴛᴏᴋᴇɴ  ", url=short_token_link)
     button2 = InlineKeyboardButton("ᴛᴜᴛᴏʀɪᴀʟ", url="https://t.me/How_to_Download_7x/32")
     keyboard = InlineKeyboardMarkup([
@@ -180,7 +181,7 @@ async def get_token(message, user_id):
         [InlineKeyboardButton("ᴘʀᴇᴍɪᴜᴍ", callback_data="premuim")],
         [InlineKeyboardButton("ᴄʟᴏsᴇ", callback_data="close")],
     ])
-
+    
     try:
         await message.edit_text("<i>Invalid or expired token. Here is your new token link. Click the button below to use it.\n\n **Valid Till 1 days.**</i>", reply_markup=keyboard)
     except FloodWait as e:

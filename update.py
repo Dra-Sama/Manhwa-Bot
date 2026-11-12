@@ -1,36 +1,19 @@
+# Code By @V_Sbotmaker (on Telegram)
 
 from os import path as ospath
 from subprocess import run as srun
 
-from os import environ
-
-UPSTREAM_REPO = environ.get("UPSTREAM_REPO", "")  # SSH URL for private repo
-UPSTREAM_BRANCH = environ.get("UPSTREAM_BRANCH", "master")
-GITHUB_EMAIL = environ.get("GITHUB_EMAIL", "random@gmail.com")
-GITHUB_USERNAME = environ.get("GITHUB_USERNAME", "random")
-
-
-if UPSTREAM_REPO is not None:
-    if ospath.exists(".git"):
-        srun(["rm", "-rf", ".git"])
-    try:
+try:
         update = srun(
             [
-                f"git init -q \
-                && git config --global user.email {GITHUB_EMAIL} \
-                && git config --global user.name {GITHUB_USERNAME} \
-                && git add . \
-                && git commit -sm update -q \
-                && git remote add origin {UPSTREAM_REPO} \
-                && git fetch origin -q \
-                && git reset --hard origin/{UPSTREAM_BRANCH} -q"
+                "git pull"
             ],
             shell=True,
         )
         
         if update.returncode == 0:
-            print("Successfully updated with latest commit from UPSTREAM_REPO")
+            print(f"Successfully updated with latest commit {UPSTREAM_BRANCH} from UPSTREAM_REPO")
         else:
             print("Something went wrong while updating, check UPSTREAM_REPO if valid or not!")
-    except Exception as err:
+except Exception as err:
         print(err)

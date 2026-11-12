@@ -1,201 +1,281 @@
+# Code By @V_Sbotmaker (on Telegram)
+import asyncio
+import sys
+
+import pyrogram.errors
+from pyrogram import filters
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+
+from bot import Vars
+from Tools.base import ( #noqa
+    queue, igrone_error, get_episode_number, retry_on_flood,
+    TTLCache, log as log_fu
+)
 from Webs import web_data
 
+_TTL = 7200
 
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
-import asyncio
-import pyrogram.errors
-from pyrogram.errors import FloodWait
-from bot import Vars
-from loguru import logger
-from pyrogram import Client, filters
+searchs = TTLCache(default_timeout=_TTL)
+backs = TTLCache(default_timeout=_TTL)
+chaptersList = TTLCache(default_timeout=_TTL)
+_storage = TTLCache(default_timeout=_TTL)
+pagination = TTLCache(default_timeout=_TTL)
+subscribes = TTLCache(default_timeout=_TTL)
 
-from Tools.base import queue, igrone_error, get_episode_number, retry_on_flood, TTLCache
+search_storage_cache = TTLCache(default_timeout=_TTL, cleanup_interval=60)  # search.py
+function_cache = TTLCache(default_timeout=300, cleanup_interval=60)  # search.py
 
-
-
-searchs = TTLCache(default_timeout=7200, cleanup_interval=60)
-backs = TTLCache(default_timeout=7200, cleanup_interval=60)
-chaptersList = TTLCache(default_timeout=7200, cleanup_interval=60)
-_storage = TTLCache(default_timeout=7200, cleanup_interval=60)
-pagination = TTLCache(default_timeout=7200, cleanup_interval=60)
-subscribes = TTLCache(default_timeout=7200, cleanup_interval=60)
-
-Listeing_cache = {}
+Listeing_cache: dict[str, object] = {}
 
 web_data = dict(sorted(web_data.items()))
-plugins_name = " ".join(web_data[i].sf for i in web_data)
+plugins_name = " ".join(web.sf for web in web_data.values())
 
-def split_list(li):
-    return [li[x:x + 2] for x in range(0, len(li), 2)]
+# Precomputed lookups (web_data never changes after the sort above)
+_WEBS = tuple(web_data.values())
+_WEB_BY_SF = {web.sf: web for web in reversed(_WEBS)}  # reversed => first match wins
+
+_invite_cache: dict[int, str] = {}
+
+_SMALL_CAPS = "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ"
+_PLAIN = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-"
+_FANCY = _SMALL_CAPS * 2 + "𝟶𝟷𝟸𝟹𝟺𝟻𝟼𝟽𝟾𝟿−"
+_FANCY_MAP = str.maketrans(_PLAIN, _FANCY)
+
+_CALLBACK_PREFIX = {"updates": "udat", "gens": "gens", "subs": "isubs"}
+
+_PREFERRED_PRIORITY = {
+    slug: index
+    for index, slug in enumerate(
+        (
+            "official",
+            "utoon",
+            "templescan",
+            "lunatoon",
+            "magusmanga",
+            "asura",
+            "asurascan",
+            "violetscan",
+            "luacomic"
+        )
+    )
+}
+_NO_PRIORITY = len(_PREFERRED_PRIORITY)
 
 
-def is_listening_(flt, _, message: Message):
-    str_id = str(message.from_user.id)
-    if flt.is_private and str_id in Listeing_cache: # adding channels
-        if message.text == "/stop":
-            return False
+def get_cache() -> int:
+    objects = (
+        searchs,
+        backs,
+        chaptersList,
+        _storage,
+        pagination,
+        subscribes,
+        Listeing_cache,
+        web_data,
+        plugins_name,
+        search_storage_cache,
+        function_cache
+    )
 
-        elif flt.forwarded:
-            return True
-
-    return False
-
-
+    try:
+        return sum(sys.getsizeof(obj) for obj in objects)
+    except Exception:
+        return 0
 
 
-def check_get_web(url):
+def iter_chapters(data: dict, page: int = 1) -> list:
+    chapters = data.get("chapters", [])
+
+    if page == 1 or not chapters:
+        return chapters
+
+    return chapters[(page - 1) * 60 : page * 60]
+
+
+def split_list(li: list, chunk_size: int = 2, page: int = 0) -> list:
+    """Split `li` into chunks of `chunk_size`.
+
+    page=0 returns every chunk as a list of lists; page>=1 returns just that
+    page's items, e.g. split_list([1..10], 3, 2) -> [4, 5, 6].
+    """
+
+    if page == 0:
+        return [li[i : i + chunk_size] for i in range(0, len(li), chunk_size)]
+
+    start = (page - 1) * chunk_size
+
+    return li[start : start + chunk_size]
+
+
+def is_listening_(flt, _, message: Message) -> bool:
+    user = message.from_user
+
+    if not user or not flt.is_private or not flt.forwarded:
+        return False
+
+    return str(user.id) in Listeing_cache and message.text != "/stop"
+
+
+def check_get_web(url: str | None):
     if not url:
         return None
 
-    for web in web_data.values():
-        if url.startswith(web.url):
-            return web
+    return next((web for web in _WEBS if url.startswith(web.url)), None)
 
+
+def get_webs(sf: str):
+    return _WEB_BY_SF.get(sf)
+
+
+def translation(text: str) -> str:
+    return text.translate(_FANCY_MAP)
+
+
+async def _auth_query(flt, _, query) -> bool:
+    reply = query.message.reply_to_message
+
+    if not reply:
+        return True
+
+    while reply.from_user and getattr(reply.from_user, "is_bot", False) and reply.reply_to_message:
+        reply = reply.reply_to_message
+
+    if not reply.from_user:
+        return False
+
+    if reply.from_user.id != query.from_user.id:
+        await query.answer("This is not for you", show_alert=True)
+        return False
+
+    return True
+
+
+_AUTH_QUERY = filters.create(_auth_query)
 
 
 def is_auth_query():
-    async def func(flt, _, query):
-        reply = query.message.reply_to_message
-        if not reply:
-            return True
-
-        if not reply.from_user:
-            return False
-
-        user_id = reply.from_user.id
-        query_user_id = query.from_user.id
-        if user_id != query_user_id:
-            await query.answer("This is not for you", show_alert=True)
-            return False
-        return True
-
-    return filters.create(func)
+    return _AUTH_QUERY
 
 
-def plugins_list(type=None, page=1):
-    button = []
-    if type and type == "updates":
-        for i in web_data.keys():
-            c = web_data[i].sf
-            c = f"udat_{c}"
-            button.append(InlineKeyboardButton(i, callback_data=c))
-    elif type and type == "gens":
-        for i in web_data.keys():
-            c = web_data[i].sf
-            c = f"gens_{c}"
-            button.append(InlineKeyboardButton(i, callback_data=c))
-    elif type and type == "subs":
-        for i in web_data.keys():
-            c = web_data[i].sf
-            c = f"isubs_{c}"
-            button.append(InlineKeyboardButton(i, callback_data=c))
-    else:
-        for i in web_data.keys():
-            c = web_data[i].sf
-            c = f"plugin_{c}"
-            button.append(InlineKeyboardButton(i, callback_data=c))
+async def _no_sources() -> list[str]:
+    return []
 
-    if len(button) > 30:
-        button = button[len(button)//2:len(button)] if page != 1 else button[:len(button)//2]
-        button = split_list(button)
-        button.append([
-            InlineKeyboardButton(" >> ", callback_data="bk.p:2") if page == 1 else InlineKeyboardButton(" << ", callback_data="bk.p:1")
-        ])
-    else:
-        button = split_list(button)
 
-    button.append([
+async def plugins_list(
+    type: str | None = None,
+    page: int = 1,
+    user_id: int | None = None
+) -> InlineKeyboardMarkup:
+    from Tools.db import database
+
+    user_sources = database.get_user_disabled_sources(user_id) if user_id else _no_sources()
+    health_data, disabled = await asyncio.gather(database.get_all_sources_health(), user_sources)
+    disabled_user_sources = set(disabled)
+
+    prefix = _CALLBACK_PREFIX.get(type, "plugin")
+    buttons = []
+
+    for name, web in web_data.items():
+        sf = web.sf
+
+        # Skip globally auto-disabled sources and sources the user turned off
+        if health_data.get(sf, {}).get("status") == "auto_disabled" or sf in disabled_user_sources:
+            continue
+
+        buttons.append(InlineKeyboardButton(name, callback_data=f"{prefix}_{sf}"))
+
+    paged = len(buttons) > 30
+
+    if paged:
+        half = len(buttons) // 2
+        buttons = buttons[:half] if page == 1 else buttons[half:]
+
+    rows = split_list(buttons)
+
+    if paged:
+        label, target = (" >> ", "bk.p:2") if page == 1 else (" << ", "bk.p:1")
+        rows.append([InlineKeyboardButton(label, callback_data=target)])
+
+    footer = [
         InlineKeyboardButton("♞ All Search ♞", callback_data="plugin_all"),
         InlineKeyboardButton("🔥 Close 🔥", callback_data="kclose")
-    ])
-    return InlineKeyboardMarkup(button)
+    ]
+    rows.append(footer)
 
-def get_webs(sf):
-    return next((web for web in web_data.values() if web.sf == sf), None)
-
+    return InlineKeyboardMarkup(rows)
 
 
-async def check_fsb(client, message):
-    channel_button = []
+def _parse_channel(value: str) -> int | str:
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return value
 
-    for channel_info in client.FSB:
+
+async def _log(client, text: str) -> None:
+    await retry_on_flood(client.send_message)(Vars.LOG_CHANNEL, text)
+
+
+async def _invite_link(client, info: tuple) -> str:
+
+    if len(info) > 2:
+        return info[2]
+
+    channel = _parse_channel(info[1])
+
+    if isinstance(channel, str):
+        return f"https://telegram.me/{channel.strip()}"
+
+    if channel not in _invite_cache:
+        _invite_cache[channel] = await client.export_chat_invite_link(channel)
+
+    return _invite_cache[channel]
+
+
+async def check_fsb(client, message) -> tuple[list[InlineKeyboardButton], list]:
+    user_id = message.from_user.id
+
+    async def check(info: tuple) -> InlineKeyboardButton | None:
+        channel = _parse_channel(info[1])
+
         try:
-            channel = int(channel_info[1])
-        except Exception:
-            channel = channel_info[1]
-
-        try:
-            await client.get_chat_member(channel, message.from_user.id)
+            await client.get_chat_member(channel, user_id)
         except pyrogram.errors.UserNotParticipant:
-            channel_link = channel_info[2] if len(channel_info) > 2 else (
-                await client.export_chat_invite_link(channel) if isinstance(channel, int) 
-                else f"https://telegram.me/{channel.strip()}"
-            )
-            channel_button.append(InlineKeyboardButton(channel_info[0], url=channel_link))
+            link = await _invite_link(client, info)
+            return InlineKeyboardButton(info[0], url=link)
         except (pyrogram.errors.UsernameNotOccupied, pyrogram.errors.ChatAdminRequired) as e:
-            await retry_on_flood(client.send_message)(
-                Vars.LOG_CHANNEL, f"Channel issue: {channel} - {type(e).__name__}"
-            )
+            await _log(client, f"Channel issue: {channel} - {type(e).__name__}")
         except (pyrogram.ContinuePropagation, pyrogram.StopPropagation):
             raise
         except Exception as e:
-            await retry_on_flood(client.send_message)(
-                Vars.LOG_CHANNEL, f"Force Subscribe error: {e} at {channel}"
-            )
+            await _log(client, f"Force Subscribe error: {e} at {channel}")
 
-    return channel_button, []
+        return None
 
+    # All channels are checked concurrently; gather keeps the original order
+    results = await asyncio.gather(*map(check, client.FSB))
 
-# Optimized utility functions
-def clean(txt, length=-1):
-    """Clean text by removing special characters"""
-    txt = txt.translate(str.maketrans('', '', "_&;:None'|*?><`!@#$%^~+=\\/\n"))
-    return txt[:length] if length != -1 else txt
+    return [button for button in results if button], []
 
 
-def select_preferred_chapters(chapters_raw):
-  """Selects the preferred chapters based on the scanlator slugs."""
-  PREFERRED_SCANLATOR_SLUGS = [
-      "official",
-      "utoon",
-      "templescan",
-      "lunatoon",
-      "magusmanga",
-      "asura",
-      "asurascan",
-      "violetscan",
-      "luacomic",
-  ]
-
-  chapters_by_number = {}  # chapter number: [chapters]
-  for chap in chapters_raw:
-      chap_num = get_episode_number(chap.get("title", ""))
-      if chap_num is None or chap_num == 0:
-          continue
-
-      chapters_by_number.setdefault(str(chap_num), []).append(chap)
-
-  selected_tuples = []
-  for chap_num_str, group in chapters_by_number.items():
-      found = None
-      best_priority = len(PREFERRED_SCANLATOR_SLUGS)
-
-      for chap in group:
-          scan_group = str(chap.get("group_name", "")).lower()
-          if scan_group in PREFERRED_SCANLATOR_SLUGS:
-              priority = PREFERRED_SCANLATOR_SLUGS.index(scan_group)
-              if (found is None) or (priority < best_priority):
-                  found = chap
-                  best_priority = priority
-
-      if found:
-          selected_tuples.append((float(chap_num_str), found))
-      else:
-          selected_tuples.append((float(chap_num_str), group[0]))
+def _chapter_priority(chap: dict) -> int:
+    return _PREFERRED_PRIORITY.get(str(chap.get("group_name", "")).lower(), _NO_PRIORITY)
 
 
-  try:
-      selected_tuples.sort(key=lambda x: x[0])
-      return [chapter_data for _, chapter_data in selected_tuples]
-  except Exception:
-      return [chapter_data for _, chapter_data in selected_tuples]
+def select_preferred_chapters(chapters_raw: list[dict]) -> list[dict]:
+    """Pick one chapter per number, preferring the scanlators listed above."""
+    groups: dict[str, list[dict]] = {}
+
+    for chap in chapters_raw:
+        chap_num = get_episode_number(chap.get("title", ""))
+
+        if chap_num is None or chap_num == 0:
+            continue
+
+        groups.setdefault(str(chap_num), []).append(chap)
+
+    # min() returns the first item on ties, and group[0] when nobody is preferred
+    selected = [(float(num), min(group, key=_chapter_priority)) for num, group in groups.items()]
+    selected.sort(key=lambda item: item[0])
+
+    return [chap for _, chap in selected]

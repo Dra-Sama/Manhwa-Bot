@@ -1,1 +1,4 @@
-python3 update.py && python3 -B main.py
+#!/bin/bash
+
+# Run the python app
+python3 -B main.py

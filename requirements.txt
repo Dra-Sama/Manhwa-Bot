@@ -1,18 +1,32 @@
 curl_cffi>=0.5.0
-cloudscraper
+ai-cloudscraper
+
 bs4
-reportlab
+fpdf2
 pillow
 loguru
-pyrofork==2.3.68
-tgcrypto-pyrofork
+
+kurigram
+kuricrypt
+
+
 pillow-avif-plugin # for avif files
 pillow-heif # for heif files
 pymongo
-PyPDF2
 psutil
-flask
-gunicorn
-cairosvg
-uvloop==0.21.0
 
+uvloop==0.21.0; sys_platform != 'win32'
+requests[socks]
+
+natsort
+pycryptodome
+tldextract
+apscheduler
+
+# PDF pipeline (hybrid: img2pdf lossless container + pikepdf merge/linearize)
+img2pdf
+pikepdf
+
+# Redis-backed queue persistence (optional — graceful no-op if REDIS_URL not set)
+redis>=5.0.0
+pydantic-settings
