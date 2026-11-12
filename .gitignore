@@ -5,6 +5,13 @@ __pycache__/
 
 # C extensions
 *.so
+Process
+Process/
+*.session
+*.session-journal
+Process/
+restart_msg.txt
+__pycache__/
 
 .venv
 .venv/
