@@ -166,11 +166,18 @@ del_expired - (ADMINS) To DELETE ALL PREMUIM USERS
                 <b>Dra Sama</b>
             </td>
             <td align="center">
-                <a href="https://telegram.me/Shanks_Kun">
+                <a href="https://telegram.me/Shanks_Pro">
                     <img width="200" src="https://ik.imagekit.io/jbxs2z512/photo_2025-05-15_20-43-41.jpg?updatedAt=1751970727124" alt="Shanks Kun">
                 </a>
                 <br />
                 <b>Shanks Kun</b>
+            </td>
+            <td align="center">
+                <a href="https://telegram.me/V_Sbotmaker">
+                    <img width="200" src="https://ik.imagekit.io/jbxs2z512/photo_2026-06-06_01-06-45.mp4" alt="ᴀʟʀᴇᴀᴅʏ ᴅᴇᴀᴅ">
+                </a>
+                <br />
+                <b>ᴀʟʀᴇᴀᴅʏ ᴅᴇᴀᴅ</b>
             </td>
         </tr>
     </table>
