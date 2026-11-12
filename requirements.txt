@@ -1,32 +1,32 @@
-curl_cffi>=0.5.0
-ai-cloudscraper
+curl_cffi==0.17.0
+ai-cloudscraper==3.8.4
 
-bs4
-fpdf2
-pillow
-loguru
+beautifulsoup4==4.15.0
+fpdf2==2.9.0
+pillow==13.0.0
+loguru==0.7.3
 
-kurigram
-kuricrypt
+kurigram==2.2.27
+kuricrypt==0.1.1
 
 
-pillow-avif-plugin # for avif files
-pillow-heif # for heif files
-pymongo
-psutil
+pillow-avif-plugin==1.6.0 # for avif files
+pillow-heif==1.7.0 # for heif files
+pymongo==4.19.0
+psutil==7.2.2
 
-uvloop==0.21.0; sys_platform != 'win32'
-requests[socks]
+uvloop==0.23.0; sys_platform != 'win32'
+requests[socks]==2.34.2
 
-natsort
-pycryptodome
-tldextract
-apscheduler
+natsort==8.4.0
+pycryptodome==4.4.0
+tldextract==5.4.0
+apscheduler==3.11.3
 
 # PDF pipeline (hybrid: img2pdf lossless container + pikepdf merge/linearize)
-img2pdf
-pikepdf
+img2pdf==0.6.3
+pikepdf==10.0.0
 
 # Redis-backed queue persistence (optional — graceful no-op if REDIS_URL not set)
-redis>=5.0.0
-pydantic-settings
+redis==7.0.1
+pydantic-settings==2.11.0
