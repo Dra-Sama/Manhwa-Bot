@@ -3,7 +3,7 @@
 from .scraper import shared_scraper as scraper
 
 from bs4 import BeautifulSoup
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, urlencode, urljoin
 
 from loguru import logger
 from .utitls import DEAULT_MSG_FORMAT
@@ -158,6 +158,7 @@ class WeebCentralWebs:
     image_links = []
     
     url = url.replace("%C2%", "&")
+    url = urljoin(self.url, url)
     response = await scraper.get(url, cs=True)# headers=self.headers)
     if response:
       bs = BeautifulSoup(response, "html.parser")
