@@ -45,8 +45,30 @@ class MangadotWebs:
                 poster = tag.find('img')
                 poster = self.url + poster.get('src') if poster else None 
 
-                title_tag = tag.find(class_="line-clamp-2 text-[12px] font-normal leading-[1.28] text-[#fafafa]")
-                title = str(title_tag.text).strip() if hasattr(title_tag, 'text') else 'N/A'
+                # Prefer semantic title fields over fragile Tailwind classes.
+                title = None
+                heading = tag.select_one("h2, h3, h4, [class*='line-clamp']")
+                image = tag.find("img")
+
+                candidates = [
+                    heading.get_text(" ", strip=True) if heading else None,
+                    tag.get("title"),
+                    tag.get("aria-label"),
+                    image.get("alt") if image else None,
+                    tag.get_text(" ", strip=True),
+                ]
+
+                for candidate in candidates:
+                    if not isinstance(candidate, str):
+                        continue
+                    candidate = candidate.strip()
+                    if candidate and candidate.lower() not in {
+                        "n/a", "cover", "image", "read", "read now", "manga"
+                    }:
+                        title = candidate
+                        break
+
+                title = title or "N/A"
 
                 results.append({
                     'title': title,
@@ -253,7 +275,7 @@ class MangadotWebs:
                 return results
             
             for img in images:
-                if not isinstance(img, dict) and not img.get('url'):
+                if not isinstance(img, dict) or not img.get('url'):
                     continue
 
                 img_url = self.url + img.get('url')

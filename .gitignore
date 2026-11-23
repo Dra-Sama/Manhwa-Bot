@@ -214,3 +214,26 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Manhwa Bot local exclusions
+
+# Environment configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local backups
+*.bak
+*.before_*
+
+# Runtime and generated files
+*.log
+downloaded_files/
+pics.txt

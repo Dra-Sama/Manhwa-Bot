@@ -657,6 +657,8 @@ class BrowserHub:
         async with self._open_lock:
             conn = browser.main_tab  # a page connection (browser.connection returns None here)
 
+            from seleniumbase.undetected.cdp_driver.browser import cdp
+            from seleniumbase.undetected.cdp_driver.browser import cdp
             before = await conn.send(cdp.target.get_targets())
             before_ids = {str(t.target_id) for t in before}
 
@@ -688,7 +690,8 @@ class BrowserHub:
 
             tab_url = browser.tabs[0].websocket_url
             new_tab_url = tab_url.split("/page/")[0] + "/page/" + str(found.target_id)
-            page = cdp_tab.Tab(new_tab_url, found, browser)
+            from seleniumbase.undetected.cdp_driver import tab as seleniumbase_tab
+            page = seleniumbase_tab.Tab(new_tab_url, found, browser)
             page.browser = browser
             browser.targets.append(page)
 

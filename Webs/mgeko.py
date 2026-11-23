@@ -66,7 +66,7 @@ class MgekoWebs:
     # Fallback to autocomplete if nothing found via search page
     if not results:
         url = f"https://www.mgeko.cc/autocomplete?term={quote_plus(query)}"
-        request_url = f"{get_worker_url()}?url={quote(url, safe='')}"
+        request_url = url
 
         mangas = await scraper.get(request_url, cs=True)
         if not mangas:
@@ -91,7 +91,7 @@ class MgekoWebs:
 
   async def get_chapters(self, data, page: int=1):
     results = data.copy()
-    request_url = f"""{get_worker_url()}?url={quote(results['url'], safe="")}"""
+    request_url = results["url"]
 
     content = await scraper.get(request_url)
     if not content:
@@ -112,7 +112,7 @@ class MgekoWebs:
       if cover.startswith('/'):
           cover = urljoin("https://readermc.org", cover)
 
-      cover = get_worker_url() + "?url=" + quote(cover, safe="")
+      cover = cover
 
     con = bs.find(class_="categories")
     if con:
@@ -130,7 +130,7 @@ class MgekoWebs:
       )
 
     chapters_url = f"{results['url']}all-chapters/"
-    request_url = f"""{get_worker_url()}?url={quote(chapters_url, safe="")}"""
+    request_url = chapters_url
     chapters = await scraper.get(request_url)
 
     results['chapters'] = chapters if chapters else None
@@ -151,7 +151,7 @@ class MgekoWebs:
         return []
 
       if not lis:
-        return
+        return []
 
 
       for card in lis:
@@ -172,7 +172,7 @@ class MgekoWebs:
     return chapters_list[(page - 1) * 60:page * 60] if page != 1 else chapters_list
 
   async def get_pictures(self, url, data=None):
-    request_url = f"""{get_worker_url()}?url={quote(url, safe="")}"""
+    request_url = url
 
     content = await scraper.get(request_url, cs=True)
     if not content:
